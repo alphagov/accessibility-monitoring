@@ -14,7 +14,7 @@ toc=0
 
 def axeRunner(dom2test):
     try:
-        cp = subprocess.run(['axe', '--stdout', dom2test], universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cp = subprocess.run(['axe', '--stdout', dom2test, '--timeout 60' ], universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
         return cp.stdout
 
     except subprocess.CalledProcessError:
