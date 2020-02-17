@@ -1,4 +1,4 @@
-import os, json, datetime, subprocess, time
+import os, json, datetime, subprocess, time, sys, getopt
 from sqlalchemy import create_engine, Column, Integer, String, MetaData, Table
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -18,6 +18,8 @@ def axeRunner(dom2test):
         return cp.stdout
 
     except subprocess.CalledProcessError:
+        return(0)
+    except subprocess.TimeoutExpired:
         return(0)
 
 
@@ -148,23 +150,51 @@ domain_register = Table('domain_register', metadata,
     extend_existing=True
 )
 
-# pick a domain at random
-# (later enhancement - look it up in test table to see if we've done it this year if not, test it.)
-rows = session.query(domain_register).order_by(func.random()).all()
-for row in rows:
-    if (row.http_status_code=="200") | (row.https_status_code=="200"):
-        tic = time.perf_counter()
-        totalTests+=1
-        print()
-        print("****************************")
-        print("Test number " , totalTests, ": ", row.domain_name)
-        print("****************************")
-        doATest(row.domain_name)
-        print(f"Time taken: {toc - tic:0.4f} seconds")
-        print("Successful tests: ", successfulTests)
-        print("Failed tests: ", failedTests)
 
-print(".")
-print("****************************")
-print("Total tests: " , totalTests)
-print("****************************")
+def doTheLoop():
+    global totalTests, tic, toc
+    # pick a domain at random
+    # (later enhancement - look it up in test table to see if we've done it this year if not, test it.)
+    rows = session.query(domain_register).order_by(func.random()).all()
+    for row in rows:
+        if (row.http_status_code=="200") | (row.https_status_code=="200"):
+            tic = time.perf_counter()
+            totalTests+=1
+            print()
+            print("****************************")
+            print("Test number " , totalTests, ": ", row.domain_name)
+            print("****************************")
+            doATest(row.domain_name)
+            print(f"Time taken: {toc - tic:0.4f} seconds")
+            print("Successful tests: ", successfulTests)
+            print("Failed tests: ", failedTests)
+
+    print(".")
+    print("****************************")
+    print("Total tests: " , totalTests)
+    print("****************************")
+
+
+def main(argv):
+   singleDomain = ''
+   try:
+      opts, args = getopt.getopt(argv,"hd:",["singleDomain="])
+   except getopt.GetoptError:
+      print ('axerunner.py -d <domain_name>')
+      sys.exit(2)
+   for opt, arg in opts:
+     if opt == '-h':
+          print ('axerunner.py -d <domain_name>')
+          sys.exit()
+     elif opt in ("-d", "--singleDomain"):
+         singleDomain = arg
+         print ('domain to test is "', singleDomain)
+
+   if singleDomain:
+       doATest(singleDomain)
+   else:
+       doTheLoop()
+
+
+if __name__ == "__main__":
+   main(sys.argv[1:])
