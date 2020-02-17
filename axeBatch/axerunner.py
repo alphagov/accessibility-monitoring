@@ -1,14 +1,16 @@
-import os, json, datetime, subprocess
-from sqlalchemy import create_engine
+import os, json, datetime, subprocess, time
+from sqlalchemy import create_engine, Column, Integer, String, MetaData, Table
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, String, MetaData, Table
 from sqlalchemy.types import DateTime
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSON
-from sqlalchemy import or_
 
-
+totalTests = 0
+successfulTests = 0
+failedTests = 0
+tic=0
+toc=0
 
 def axeRunner(dom2test):
     try:
@@ -27,10 +29,12 @@ def parseResult(jsonIn):
     return resultsDict
 
 def saveResult(domain_name, resultsDict):
+    global toc
     print(json.dumps(resultsDict[0]["url"], indent=3))
+    toc = time.perf_counter()
 
     result = session.execute(
-        test_header.insert(), {"test_timestamp": resultsDict[0]["timestamp"], "url": resultsDict[0]["url"], "domain_name": domain_name, "axe_version": resultsDict[0]["testEngine"]["version"]})
+        test_header.insert(), {"test_timestamp": resultsDict[0]["timestamp"], "url": resultsDict[0]["url"], "domain_name": domain_name, "axe_version": resultsDict[0]["testEngine"]["version"], "test_environment": resultsDict[0]["testEnvironment"], "time_taken": toc-tic})
 
     test_id = result.inserted_primary_key[0]
     print(result.inserted_primary_key)
@@ -42,7 +46,7 @@ def saveResult(domain_name, resultsDict):
     for testItem in resultsDict[0]["violations"]:
         count+=1
         result = session.execute(
-            test_data.insert(), {"test_id": test_id, "rule_id": testItem["id"], "test_status": "violation", "nodes": testItem["nodes"]})
+            test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "violation", "nodes": testItem["nodes"]})
     session.commit()
     print(count, " violations recorded")
 
@@ -51,7 +55,7 @@ def saveResult(domain_name, resultsDict):
     for testItem in resultsDict[0]["passes"]:
         count+=1
         result = session.execute(
-            test_data.insert(), {"test_id": test_id, "rule_id": testItem["id"], "test_status": "pass", "nodes": testItem["nodes"]})
+            test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "pass", "nodes": testItem["nodes"]})
     session.commit()
     print(count, " passes recorded")
 
@@ -60,7 +64,7 @@ def saveResult(domain_name, resultsDict):
     for testItem in resultsDict[0]["inapplicable"]:
         count+=1
         result = session.execute(
-            test_data.insert(), {"test_id": test_id, "rule_id": testItem["id"], "test_status": "inapplicable", "nodes": testItem["nodes"]})
+            test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "inapplicable", "nodes": testItem["nodes"]})
     session.commit()
     print(count, " inapplicable tests recorded")
 
@@ -69,7 +73,7 @@ def saveResult(domain_name, resultsDict):
     for testItem in resultsDict[0]["incomplete"]:
         count+=1
         result = session.execute(
-            test_data.insert(), {"test_id": test_id, "rule_id": testItem["id"], "test_status": "incomplete", "nodes": testItem["nodes"]})
+            test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "incomplete", "nodes": testItem["nodes"]})
     session.commit()
     print(count, " incomplete tests recorded")
 
@@ -78,10 +82,14 @@ def saveResult(domain_name, resultsDict):
     doATest - run axe on the domain, parse the results, save 'em
 """
 def doATest(domain):
+    global successfulTests, failedTests
     axeresult = axeRunner(domain)
     if axeresult:
         resultsDict = parseResult(axeresult)
         saveResult(domain, resultsDict)
+        successfulTests+=1
+    else:
+        failedTests+=1
 
 """
 ******************
@@ -90,7 +98,6 @@ script entry point
 """
 # set to database credentials/host
 # taken from local environment variable in the format postgresql+psycopg2://localuser:localuser@localhost/a11ymon
-print("Connecting to ", os.getenv("DATABASE_URL"))
 CONNECTION_URI = os.getenv("DATABASE_URL")
 
 engine = create_engine(CONNECTION_URI)
@@ -125,7 +132,7 @@ test_header = Table('testresult_axe_header', metadata,
 test_data = Table('testresult_axe_data', metadata,
     Column('test_data_id',Integer, primary_key=True, autoincrement=True),
     Column('test_id', Integer),
-    Column('rule_id', String),
+    Column('rule_name', String),
     Column('test_status',String),
     Column('nodes',JSON),
     schema='a11ymon',
@@ -143,15 +150,19 @@ domain_register = Table('domain_register', metadata,
 
 # pick a domain at random
 # (later enhancement - look it up in test table to see if we've done it this year if not, test it.)
-totalTests = 0
 rows = session.query(domain_register).order_by(func.random()).all()
 for row in rows:
     if (row.http_status_code=="200") | (row.https_status_code=="200"):
+        tic = time.perf_counter()
         totalTests+=1
+        print()
         print("****************************")
         print("Test number " , totalTests, ": ", row.domain_name)
         print("****************************")
         doATest(row.domain_name)
+        print(f"Time taken: {toc - tic:0.4f} seconds")
+        print("Successful tests: ", successfulTests)
+        print("Failed tests: ", failedTests)
 
 print(".")
 print("****************************")
