@@ -1,5 +1,5 @@
 import os, json, datetime, subprocess, time, sys, getopt
-from sqlalchemy import create_engine, Column, Integer, String, MetaData, Table
+from sqlalchemy import create_engine, Column, Integer, String, MetaData, Table, and_
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import DateTime
@@ -157,20 +157,24 @@ domain_register = Table('domain_register', metadata,
 def doTheLoop():
     global totalTests, tic, toc
     # pick a domain at random
-    # (later enhancement - look it up in test table to see if we've done it this year if not, test it.)
     rows = session.query(domain_register).order_by(func.random()).all()
     for row in rows:
         if (row.http_status_code=="200") | (row.https_status_code=="200"):
-            tic = time.perf_counter()
-            totalTests+=1
-            print()
-            print("****************************")
-            print("Test number " , totalTests, ": ", row.domain_name)
-            print("****************************")
-            doATest(row.domain_name)
-            print(f"Time taken: {toc - tic:0.4f} seconds")
-            print("Successful tests: ", successfulTests)
-            print("Failed tests: ", failedTests)
+            # check to see when we last tested this domain
+            oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
+            testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.domain_name==row.domain_name)).count()
+            if testedRows==0:
+                # we've not done this one within the last year so carry on
+                tic = time.perf_counter()
+                totalTests+=1
+                print()
+                print("****************************")
+                print("Test number " , totalTests, ": ", row.domain_name)
+                print("****************************")
+                doATest(row.domain_name)
+                print(f"Time taken: {toc - tic:0.4f} seconds")
+                print("Successful tests: ", successfulTests)
+                print("Failed tests: ", failedTests)
 
     print(".")
     print("****************************")
