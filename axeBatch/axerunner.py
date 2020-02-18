@@ -88,6 +88,9 @@ def doATest(domain):
     axeresult = axeRunner(domain)
     if axeresult:
         resultsDict = parseResult(axeresult)
+        if resultsDict[0]["url"]=="chrome-error://chromewebdata/":
+            failedTests+=1
+            return(0)
         saveResult(domain, resultsDict)
         successfulTests+=1
     else:
