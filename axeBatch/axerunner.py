@@ -1,5 +1,5 @@
 import os, json, datetime, subprocess, time, sys, getopt
-from sqlalchemy import create_engine, Column, Integer, String, MetaData, Table, and_
+from sqlalchemy import create_engine, Column, Integer, String, MetaData, Table, and_, or_
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import DateTime
@@ -13,6 +13,7 @@ tic=0
 toc=0
 
 def axeRunner(dom2test):
+    print("testing ", dom2test)
     try:
         cp = subprocess.run(['axe', '--stdout', dom2test, '--timeout 60' ], universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
         return cp.stdout
@@ -32,8 +33,8 @@ def parseResult(jsonIn):
 
 def saveResult(domain_name, resultsDict):
     global toc
-    print(json.dumps(resultsDict[0]["url"], indent=3))
     toc = time.perf_counter()
+    print(json.dumps(resultsDict[0]["url"], indent=3), toc-tic)
 
     result = session.execute(
         test_header.insert(), {"test_timestamp": resultsDict[0]["timestamp"], "url": resultsDict[0]["url"], "domain_name": domain_name, "axe_version": resultsDict[0]["testEngine"]["version"], "test_environment": resultsDict[0]["testEnvironment"], "time_taken": toc-tic})
@@ -50,7 +51,6 @@ def saveResult(domain_name, resultsDict):
         result = session.execute(
             test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "violation", "nodes": testItem["nodes"]})
     session.commit()
-    print(count, " violations recorded")
 
     #record passes
     count=0
@@ -59,7 +59,6 @@ def saveResult(domain_name, resultsDict):
         result = session.execute(
             test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "pass", "nodes": testItem["nodes"]})
     session.commit()
-    print(count, " passes recorded")
 
     #record inapplicable
     count=0
@@ -68,7 +67,6 @@ def saveResult(domain_name, resultsDict):
         result = session.execute(
             test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "inapplicable", "nodes": testItem["nodes"]})
     session.commit()
-    print(count, " inapplicable tests recorded")
 
     #record incomplete
     count=0
@@ -77,24 +75,34 @@ def saveResult(domain_name, resultsDict):
         result = session.execute(
             test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "incomplete", "nodes": testItem["nodes"]})
     session.commit()
-    print(count, " incomplete tests recorded")
 
 
 """
     doATest - run axe on the domain, parse the results, save 'em
 """
-def doATest(domain):
+def doATest(domain, addSomeDubs):
     global successfulTests, failedTests
+
+    if addSomeDubs:
+        domain = "www." + domain
+
     axeresult = axeRunner(domain)
     if axeresult:
         resultsDict = parseResult(axeresult)
+        # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
         if resultsDict[0]["url"]=="chrome-error://chromewebdata/":
             failedTests+=1
+            toc = time.perf_counter()
             return(0)
         saveResult(domain, resultsDict)
         successfulTests+=1
     else:
-        failedTests+=1
+        print("TIMED OUT")
+        if addSomeDubs:
+            failedTests+=1
+            toc = time.perf_counter()
+        else:
+            doATest(domain, True)
 
 """
 ******************
@@ -105,6 +113,7 @@ script entry point
 # taken from local environment variable in the format postgresql+psycopg2://localuser:localuser@localhost/a11ymon
 CONNECTION_URI = os.getenv("DATABASE_URL")
 
+print("Connecting to database...")
 engine = create_engine(CONNECTION_URI)
 
 Session = sessionmaker(bind=engine)
@@ -156,25 +165,27 @@ domain_register = Table('domain_register', metadata,
 
 def doTheLoop():
     global totalTests, tic, toc
+    print("Selecting data...")
     # pick a domain at random
-    rows = session.query(domain_register).order_by(func.random()).all()
+    # in the long term, the domains to test will be picked from a specific list, but for now we're testing ALL THE THINGS
+    rows = session.query(domain_register).filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).order_by(func.random()).all()
     for row in rows:
-        if (row.http_status_code=="200") | (row.https_status_code=="200"):
-            # check to see when we last tested this domain
-            oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
-            testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.domain_name==row.domain_name)).count()
-            if testedRows==0:
-                # we've not done this one within the last year so carry on
-                tic = time.perf_counter()
-                totalTests+=1
-                print()
-                print("****************************")
-                print("Test number " , totalTests, ": ", row.domain_name)
-                print("****************************")
-                doATest(row.domain_name)
-                print(f"Time taken: {toc - tic:0.4f} seconds")
-                print("Successful tests: ", successfulTests)
-                print("Failed tests: ", failedTests)
+        print(row.domain_name)
+        # check to see when we last tested this domain
+        oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
+        testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.domain_name==row.domain_name)).count()
+        if testedRows==0:
+            # we've not done this one within the last year so carry on
+            tic = time.perf_counter()
+            totalTests+=1
+            print()
+            print("****************************")
+            print("Test number " , totalTests, ": ", row.domain_name)
+            print("****************************")
+            doATest(row.domain_name, False)
+            print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
+            print("Successful tests: ", successfulTests)
+            print("Failed tests: ", failedTests)
 
     print(".")
     print("****************************")
