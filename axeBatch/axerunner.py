@@ -1,5 +1,5 @@
 import os, json, datetime, subprocess, time, sys, getopt
-from sqlalchemy import create_engine, Column, Integer, String, MetaData, Table, and_, or_
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData, Table, and_, or_
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import DateTime
@@ -35,47 +35,55 @@ def parseResult(jsonIn):
 def saveResult(domain_name, resultsDict):
     global toc
     toc = time.perf_counter()
-    print(json.dumps(resultsDict[0]["url"], indent=3), toc-tic)
+    if resultsDict:
+        print(json.dumps(resultsDict[0]["url"], indent=3), toc-tic)
 
-    result = session.execute(
-        test_header.insert(), {"test_timestamp": resultsDict[0]["timestamp"], "url": resultsDict[0]["url"], "domain_name": domain_name, "axe_version": resultsDict[0]["testEngine"]["version"], "test_environment": resultsDict[0]["testEnvironment"], "time_taken": toc-tic})
-
-    test_id = result.inserted_primary_key[0]
-    print(result.inserted_primary_key)
-    session.commit()
-
-    #record data. We're doing this the long way as we want the results to say "pass" not "passes" and "violation" not "violations" etc and it's just less faff TBH
-    #record violations
-    count=0
-    for testItem in resultsDict[0]["violations"]:
-        count+=1
         result = session.execute(
-            test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "violation", "nodes": testItem["nodes"]})
-    session.commit()
+            test_header.insert(), {"test_timestamp": resultsDict[0]["timestamp"], "url": resultsDict[0]["url"], "domain_name": domain_name, "axe_version": resultsDict[0]["testEngine"]["version"], "test_environment": resultsDict[0]["testEnvironment"], "time_taken": toc-tic, "test_succeeded": True})
 
-    #record passes
-    count=0
-    for testItem in resultsDict[0]["passes"]:
-        count+=1
-        result = session.execute(
-            test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "pass", "nodes": testItem["nodes"]})
-    session.commit()
+        test_id = result.inserted_primary_key[0]
+        print(result.inserted_primary_key)
+        session.commit()
 
-    #record inapplicable
-    count=0
-    for testItem in resultsDict[0]["inapplicable"]:
-        count+=1
-        result = session.execute(
-            test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "inapplicable", "nodes": testItem["nodes"]})
-    session.commit()
+        #record data. We're doing this the long way as we want the results to say "pass" not "passes" and "violation" not "violations" etc and it's just less faff TBH
+        #record violations
+        count=0
+        for testItem in resultsDict[0]["violations"]:
+            count+=1
+            result = session.execute(
+                test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "violation", "nodes": testItem["nodes"]})
+        session.commit()
 
-    #record incomplete
-    count=0
-    for testItem in resultsDict[0]["incomplete"]:
-        count+=1
+        #record passes
+        count=0
+        for testItem in resultsDict[0]["passes"]:
+            count+=1
+            result = session.execute(
+                test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "pass", "nodes": testItem["nodes"]})
+        session.commit()
+
+        #record inapplicable
+        count=0
+        for testItem in resultsDict[0]["inapplicable"]:
+            count+=1
+            result = session.execute(
+                test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "inapplicable", "nodes": testItem["nodes"]})
+        session.commit()
+
+        #record incomplete
+        count=0
+        for testItem in resultsDict[0]["incomplete"]:
+            count+=1
+            result = session.execute(
+                test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "incomplete", "nodes": testItem["nodes"]})
+        session.commit()
+    else:
         result = session.execute(
-            test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "incomplete", "nodes": testItem["nodes"]})
-    session.commit()
+            test_header.insert(), {"test_timestamp": datetime.datetime.now(), "url": "", "domain_name": domain_name, "axe_version": "", "test_environment": "", "time_taken": toc-tic, "test_succeeded": False})
+
+        test_id = result.inserted_primary_key[0]
+        print(result.inserted_primary_key)
+        session.commit()
 
 
 """
@@ -94,15 +102,19 @@ def doATest(domain, addSomeDubs):
         if resultsDict[0]["url"]=="chrome-error://chromewebdata/":
             failedTests+=1
             toc = time.perf_counter()
+            saveResult(domain, False)
             return(0)
         saveResult(domain, resultsDict)
         successfulTests+=1
     else:
         print("TIMED OUT")
         if addSomeDubs:
+            # we've already tried it with and without www so give up.
             failedTests+=1
             toc = time.perf_counter()
+            saveResult(domain, False)
         else:
+            # do the test again but with www. prepended to the domain
             doATest(domain, True)
 
 """
@@ -141,6 +153,7 @@ test_header = Table('testresult_axe_header', metadata,
     Column('url', String),
     Column('domain_name',String),
     Column('axe_version',String),
+    Column('test_succeeded',Boolean),
     schema='a11ymon',
     extend_existing=True
 )
@@ -189,6 +202,8 @@ def doTheLoop():
             print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
             print("Successful tests: ", successfulTests)
             print("Failed tests: ", failedTests)
+            print("****************************")
+            print()
 
     print(".")
     print("****************************")
