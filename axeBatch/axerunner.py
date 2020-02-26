@@ -15,8 +15,9 @@ toc=0
 def axeRunner(dom2test):
     print("testing ", dom2test)
     try:
-        cp = subprocess.run(['axe', '--stdout', dom2test, '--timeout 60' ], universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-        return cp.stdout
+        axeprocess = subprocess.run(['axe', '--stdout', dom2test, '--timeout 60' ], universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        result=axeprocess.stdout
+        return result
 
     except subprocess.CalledProcessError:
         return(0)
@@ -158,6 +159,7 @@ domain_register = Table('domain_register', metadata,
     Column('domain_name', String),
     Column('http_status_code', String),
     Column('http_status_code',String),
+    Column('data_source',String),
     schema='pubsecdomains',
     extend_existing=True
 )
@@ -168,7 +170,8 @@ def doTheLoop():
     print("Selecting data...")
     # pick a domain at random
     # in the long term, the domains to test will be picked from a specific list, but for now we're testing ALL THE THINGS
-    rows = session.query(domain_register).filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).order_by(func.random()).all()
+    # filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).
+    rows = session.query(domain_register).filter(domain_register.c.data_source=='National Archive, Feb 2020').order_by(func.random()).all()
     for row in rows:
         print(row.domain_name)
         # check to see when we last tested this domain
@@ -209,7 +212,7 @@ def main(argv):
          print ('domain to test is "', singleDomain)
 
    if singleDomain:
-       doATest(singleDomain)
+       doATest(singleDomain, False)
    else:
        doTheLoop()
 
