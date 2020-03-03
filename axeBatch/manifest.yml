@@ -1,0 +1,10 @@
+---
+applications:
+  - name: axebatch
+    buildpacks:
+      - nodejs_buildpack
+      - python_buildpack
+    no-route: True
+    health-check-type: process
+    services:
+      - a11ymon-data
