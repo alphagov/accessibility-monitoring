@@ -7,16 +7,16 @@ const axeCore = require('axe-core');
 
 
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 8080;
 
 const server = http.createServer((req, res) => {
   const queryObject = url.parse(req.url,true).query;
 
   res.statusCode = 200;
-  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('Content-Type', 'text/JSON');
   if(queryObject.targetURL) {
     if(!isValidURL(queryObject.targetURL)) {
-        res.write('Invalid URL');
+        res.end('Invalid URL: ' + queryObject.targetURL);
     } else {
       // run axe...
       runAxe2(queryObject.targetURL)
@@ -26,12 +26,19 @@ const server = http.createServer((req, res) => {
       	})
       	.catch(err => {
       		console.error('Error running axe-core (in main):', err.message);
-          res.end("Bloop");
+          // todo: create proper error response(s)
+          res.end('Error running axe-core (in main):', err.message);
       		process.exit(1);
       	})
 
       console.log("returned");
     }
+  } else {
+    // no targetURL in query string
+    errorMessage = `No URL passed. Received ${JSON.stringify(queryObject)}\nUsage: [script]/?targetURL=[targetURL]`;
+    console.log(errorMessage); // don't use console.error as this is an acceptable usage error
+    // todo: create proper error response(s)
+    res.end(errorMessage);
   }
 });
 
