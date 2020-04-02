@@ -41,7 +41,7 @@ const server = http.createServer((req, res) => {
       }
     };
     resultsObject.error.message = errorMessage;
-    results = JSON.stringify(resultsObject);
+    results = resultsObject;
     console.log(errorMessage); // don't use console.error as this is an acceptable usage error
     // todo: create proper error response(s)
     res.end(results);
@@ -97,7 +97,7 @@ const runAxe2 = async url => {
       }
     };
     resultsObject.error.message = errorMessage;
-    results = JSON.stringify(resultsObject);
+    results = resultsObject;
     console.error('Error running axe-core (in runAxe2):', err.message);
   }
 
