@@ -1,0 +1,12 @@
+{
+	"name": "axe_runner",
+	"version": "0.0.1",
+	"main": "app.js",
+	"scripts": {
+		"test": "node app.js https://www.gov.uk"
+	},
+	"dependencies": {
+		"axe-core": "^3.3.1",
+		"puppeteer": "^1.19.0"
+	}
+}

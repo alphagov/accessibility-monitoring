@@ -1,0 +1,8 @@
+---
+applications:
+  - name: axe_runner
+    buildpacks:
+    - https://github.com/cloudfoundry/apt-buildpack.git#v0.2.2
+    - nodejs_buildpack
+    health-check-type: http
+    health-check-http-endpoint: /
