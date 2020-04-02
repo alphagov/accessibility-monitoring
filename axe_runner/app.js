@@ -31,14 +31,20 @@ const server = http.createServer((req, res) => {
       		process.exit(1);
       	})
 
-      console.log("returned");
     }
   } else {
     // no targetURL in query string
     errorMessage = `No URL passed. Received ${JSON.stringify(queryObject)}\nUsage: [script]/?targetURL=[targetURL]`;
+    var resultsObject = {
+      "error" : {
+        "type" : "user"
+      }
+    };
+    resultsObject.error.message = errorMessage;
+    results = JSON.stringify(resultsObject);
     console.log(errorMessage); // don't use console.error as this is an acceptable usage error
     // todo: create proper error response(s)
-    res.end(errorMessage);
+    res.end(results);
   }
 });
 
@@ -84,7 +90,14 @@ const runAxe2 = async url => {
 			await browser.close();
 		}
 
-    results = 'Error running axe-core (in runAxe2):' + err.message;
+    errorMessage = 'Error running axe-core (in runAxe2):' + err.message;
+    var resultsObject = {
+      "error" : {
+        "type" : "system"
+      }
+    };
+    resultsObject.error.message = errorMessage;
+    results = JSON.stringify(resultsObject);
     console.error('Error running axe-core (in runAxe2):', err.message);
   }
 
