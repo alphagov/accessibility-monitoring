@@ -6,45 +6,73 @@ const puppeteer = require('puppeteer');
 const axeCore = require('axe-core');
 
 
-
 const port = process.env.PORT || 8080;
 
 const server = http.createServer((req, res) => {
   const queryObject = url.parse(req.url,true).query;
 
   res.statusCode = 200;
-  res.setHeader('Content-Type', 'text/JSON');
-  if(queryObject.targetURL) {
-    if(!isValidURL(queryObject.targetURL)) {
-        res.end('Invalid URL: ' + queryObject.targetURL);
-    } else {
-      // run axe...
-      runAxe2(queryObject.targetURL)
-      	.then(results => {
-          console.log("runAxe2 returned OK");
-          res.end(JSON.stringify(results));
-      	})
-      	.catch(err => {
-      		console.error('Error running axe-core (in main):', err.message);
-          // todo: create proper error response(s)
-          res.end('Error running axe-core (in main):', err.message);
-      		process.exit(1);
-      	})
 
-    }
-  } else {
-    // no targetURL in query string
-    errorMessage = `No URL passed. Received ${JSON.stringify(queryObject)}\nUsage: [script]/?targetURL=[targetURL]`;
-    var resultsObject = {
-      "error" : {
-        "type" : "user"
+  if(req.url ==='/healthcheck') {
+      res.write("I'm good");
+      res.end();
+   } else {
+
+    res.setHeader('Content-Type', 'text/JSON');
+    if(queryObject.targetURL) {
+      if(!isValidURL(queryObject.targetURL)) {
+          errorMessage = 'Invalid URL: ' + queryObject.targetURL;
+          console.error(errorMessage);
+          var resultsObject = {
+            "error" : {
+              "type" : "user"
+            }
+          };
+          resultsObject.error.message = errorMessage;
+          results = JSON.stringify(resultsObject);
+          res.statusCode = 400;
+          res.end(results);
+      } else {
+        // run axe...
+        runAxe2(queryObject.targetURL)
+        	.then(results => {
+            console.log("runAxe2 returned OK");
+            // check to see if it returned a legit error
+            if (results.error) {
+              res.statusCode = 400;
+            }
+            res.end(JSON.stringify(results));
+        	})
+        	.catch(err => {
+            errorMessage = 'Error running axe-core (in main): ' + err.message
+        		console.error(errorMessage);
+            var resultsObject = {
+              "error" : {
+                "type" : "system"
+              }
+            };
+            resultsObject.error.message = errorMessage;
+            results = JSON.stringify(resultsObject);
+            res.statusCode = 500;
+            res.end(results);
+        		process.exit(1);
+        	})
+
       }
-    };
-    resultsObject.error.message = errorMessage;
-    results = resultsObject;
-    console.log(errorMessage); // don't use console.error as this is an acceptable usage error
-    // todo: create proper error response(s)
-    res.end(results);
+    } else {
+      // no targetURL in query string
+      errorMessage = `No URL passed. Received ${JSON.stringify(queryObject)}\nUsage: [script]/?targetURL=[targetURL]`;
+      var resultsObject = {
+        "error" : {
+          "type" : "user"
+        }
+      };
+      resultsObject.error.message = errorMessage;
+      results = JSON.stringify(resultsObject);
+      res.statusCode = 400;
+      console.log(errorMessage); // don't use console.error as this is an acceptable usage error
+      res.end(results);
+    }
   }
 });
 
@@ -97,8 +125,8 @@ const runAxe2 = async url => {
       }
     };
     resultsObject.error.message = errorMessage;
-    results = resultsObject;
-    console.error('Error running axe-core (in runAxe2):', err.message);
+    console.error(errorMessage);
+    return(resultsObject);
   }
 
   await browser.close();
