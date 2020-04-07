@@ -191,8 +191,9 @@ def doTheLoop():
     print("Selecting data...")
     # pick a domain at random
     # in the long term, the domains to test will be picked from a specific list, but for now we're testing ALL THE THINGS
-    # filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).
-    rows = session.query(domain_register).filter(domain_register.c.data_source=='National Archive, Feb 2020').order_by(func.random()).all()
+    query = session.query(domain_register).filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).order_by(func.random())
+    rows=query.all()
+    totalRows=query.count()
     for row in rows:
         print(row.domain_name)
         # check to see when we last tested this domain
@@ -204,7 +205,7 @@ def doTheLoop():
             totalTests+=1
             print()
             print("****************************")
-            print("Test number " , totalTests, ": ", row.domain_name)
+            print("Test number " , totalTests, " of ", totalRows, ": ", row.domain_name)
             print("****************************")
             doATest(row.domain_name, False)
             print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
