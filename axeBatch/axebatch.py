@@ -1,4 +1,4 @@
-import os, json, datetime, time, sys, getopt, ast
+import os, json, datetime, time, sys, getopt
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData, Table, and_, or_
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -18,10 +18,9 @@ def axeRunner(dom2test):
     print("testing ", dom2test)
     axerunnerResult = requests.get('https://axerunner.london.cloudapps.digital', params={'targetURL':'http://' + dom2test})
     if axerunnerResult.status_code==200:
-        return ast.literal_eval(axerunnerResult.text)
+        return axerunnerResult.json()
     else:
-        # if this works, I need to fix axe runner to return a proper json obj
-        errorDict = ast.literal_eval(axerunnerResult.text)
+        errorDict = axerunnerResult.json()
         return errorDict
 
 
@@ -34,8 +33,14 @@ def parseResult(jsonIn):
 def saveResult(domain_name, resultsDict):
     global toc
     toc = time.perf_counter()
-    if resultsDict:
-        print(json.dumps(resultsDict["url"], indent=3), toc-tic)
+    if "error" in resultsDict:
+        result = session.execute(
+            test_header.insert(), {"test_timestamp": datetime.datetime.now(), "url": "", "domain_name": domain_name, "axe_version": "", "test_environment": "", "time_taken": toc-tic, "test_succeeded": False, "further_info": resultsDict["error"]["message"]})
+
+        test_id = result.inserted_primary_key[0]
+        session.commit()
+    else :
+        print(json.dumps(resultsDict["url"], indent=3), toc-tic, "seconds")
 
         result = session.execute(
             test_header.insert(), {"test_timestamp": resultsDict["timestamp"], "url": resultsDict["url"], "domain_name": domain_name, "axe_version": resultsDict["testEngine"]["version"], "test_environment": resultsDict["testEnvironment"], "time_taken": toc-tic, "test_succeeded": True})
@@ -75,12 +80,6 @@ def saveResult(domain_name, resultsDict):
             result = session.execute(
                 test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "incomplete", "nodes": testItem["nodes"]})
         session.commit()
-    else:
-        result = session.execute(
-            test_header.insert(), {"test_timestamp": datetime.datetime.now(), "url": "", "domain_name": domain_name, "axe_version": "", "test_environment": "", "time_taken": toc-tic, "test_succeeded": False})
-
-        test_id = result.inserted_primary_key[0]
-        session.commit()
 
 
 """
@@ -100,28 +99,28 @@ def doATest(domain, addSomeDubs):
         resultsDict = axeResult
         print(len(resultsDict))
         if "error" in resultsDict:
-            print(resultsDict.get("error"))
-            # print(resultsDict["error"]["errorMessage"])
+            #print (json.dumps(resultsDict,  indent=4))
+            print(resultsDict["error"]["message"])
             failedTests+=1
             toc = time.perf_counter()
-            saveResult(domain, False)
+            saveResult(domain, resultsDict)
             return(0)
         else:
             # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
             if resultsDict["url"]=="chrome-error://chromewebdata/":
                 failedTests+=1
                 toc = time.perf_counter()
-                saveResult(domain, False)
+                saveResult(domain, resultsDict)
                 return(0)
             saveResult(domain, resultsDict)
             successfulTests+=1
     else:
-        print("TIMED OUT")
+        print("No result returned")
         if addSomeDubs:
             # we've already tried it with and without www so give up.
             failedTests+=1
             toc = time.perf_counter()
-            saveResult(domain, False)
+            saveResult(domain, resultsDict)
         else:
             # do the test again but with www. prepended to the domain
             doATest(domain, True)
