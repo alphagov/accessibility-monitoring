@@ -6,9 +6,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "axe-cli": "^3.2.0"
-  }
+    "minimist": ">=0.2.1"
+  },
+  "author": "Government Digital Service",
+  "license": "ISC"
 }

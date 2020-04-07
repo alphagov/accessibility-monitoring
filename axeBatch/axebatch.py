@@ -1,10 +1,12 @@
-import os, json, datetime, subprocess, time, sys, getopt
+import os, json, datetime, time, sys, getopt
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData, Table, and_, or_
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import DateTime
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSON
+
+import requests
 
 totalTests = 0
 successfulTests = 0
@@ -14,41 +16,42 @@ toc=0
 
 def axeRunner(dom2test):
     print("testing ", dom2test)
-    try:
-        axeprocess = subprocess.run(['axe', '--stdout', dom2test, '--timeout 60' ], universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-        result=axeprocess.stdout
-        return result
-
-    except subprocess.CalledProcessError:
-        return(0)
-    except subprocess.TimeoutExpired:
-        return(0)
+    axerunnerResult = requests.get('https://axerunner.london.cloudapps.digital', params={'targetURL':'http://' + dom2test})
+    if axerunnerResult.status_code==200:
+        return axerunnerResult.json()
+    else:
+        errorDict = axerunnerResult.json()
+        return errorDict
 
 
 
 def parseResult(jsonIn):
     # parse into python dict:
     resultsDict = json.loads(jsonIn)
-
     return resultsDict
 
 def saveResult(domain_name, resultsDict):
     global toc
     toc = time.perf_counter()
-    if resultsDict:
-        print(json.dumps(resultsDict[0]["url"], indent=3), toc-tic)
-
+    if "error" in resultsDict:
         result = session.execute(
-            test_header.insert(), {"test_timestamp": resultsDict[0]["timestamp"], "url": resultsDict[0]["url"], "domain_name": domain_name, "axe_version": resultsDict[0]["testEngine"]["version"], "test_environment": resultsDict[0]["testEnvironment"], "time_taken": toc-tic, "test_succeeded": True})
+            test_header.insert(), {"test_timestamp": datetime.datetime.now(), "url": "", "domain_name": domain_name, "axe_version": "", "test_environment": "", "time_taken": toc-tic, "test_succeeded": False, "further_info": resultsDict["error"]["message"]})
 
         test_id = result.inserted_primary_key[0]
-        print(result.inserted_primary_key)
+        session.commit()
+    else :
+        print(json.dumps(resultsDict["url"], indent=3), toc-tic, "seconds")
+
+        result = session.execute(
+            test_header.insert(), {"test_timestamp": resultsDict["timestamp"], "url": resultsDict["url"], "domain_name": domain_name, "axe_version": resultsDict["testEngine"]["version"], "test_environment": resultsDict["testEnvironment"], "time_taken": toc-tic, "test_succeeded": True})
+
+        test_id = result.inserted_primary_key[0]
         session.commit()
 
         #record data. We're doing this the long way as we want the results to say "pass" not "passes" and "violation" not "violations" etc and it's just less faff TBH
         #record violations
         count=0
-        for testItem in resultsDict[0]["violations"]:
+        for testItem in resultsDict["violations"]:
             count+=1
             result = session.execute(
                 test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "violation", "nodes": testItem["nodes"]})
@@ -56,7 +59,7 @@ def saveResult(domain_name, resultsDict):
 
         #record passes
         count=0
-        for testItem in resultsDict[0]["passes"]:
+        for testItem in resultsDict["passes"]:
             count+=1
             result = session.execute(
                 test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "pass", "nodes": testItem["nodes"]})
@@ -64,7 +67,7 @@ def saveResult(domain_name, resultsDict):
 
         #record inapplicable
         count=0
-        for testItem in resultsDict[0]["inapplicable"]:
+        for testItem in resultsDict["inapplicable"]:
             count+=1
             result = session.execute(
                 test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "inapplicable", "nodes": testItem["nodes"]})
@@ -72,17 +75,10 @@ def saveResult(domain_name, resultsDict):
 
         #record incomplete
         count=0
-        for testItem in resultsDict[0]["incomplete"]:
+        for testItem in resultsDict["incomplete"]:
             count+=1
             result = session.execute(
                 test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "incomplete", "nodes": testItem["nodes"]})
-        session.commit()
-    else:
-        result = session.execute(
-            test_header.insert(), {"test_timestamp": datetime.datetime.now(), "url": "", "domain_name": domain_name, "axe_version": "", "test_environment": "", "time_taken": toc-tic, "test_succeeded": False})
-
-        test_id = result.inserted_primary_key[0]
-        print(result.inserted_primary_key)
         session.commit()
 
 
@@ -93,26 +89,38 @@ def doATest(domain, addSomeDubs):
     global successfulTests, failedTests
 
     if addSomeDubs:
+        # retrying the domain with www. prepended
         domain = "www." + domain
 
-    axeresult = axeRunner(domain)
-    if axeresult:
-        resultsDict = parseResult(axeresult)
-        # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
-        if resultsDict[0]["url"]=="chrome-error://chromewebdata/":
+    axeResult = axeRunner(domain)
+    if axeResult:
+        # print(axeResult)
+        #resultsDict = ast.literal_eval(axeResult)
+        resultsDict = axeResult
+        print(len(resultsDict))
+        if "error" in resultsDict:
+            #print (json.dumps(resultsDict,  indent=4))
+            print(resultsDict["error"]["message"])
             failedTests+=1
             toc = time.perf_counter()
-            saveResult(domain, False)
+            saveResult(domain, resultsDict)
             return(0)
-        saveResult(domain, resultsDict)
-        successfulTests+=1
+        else:
+            # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
+            if resultsDict["url"]=="chrome-error://chromewebdata/":
+                failedTests+=1
+                toc = time.perf_counter()
+                saveResult(domain, resultsDict)
+                return(0)
+            saveResult(domain, resultsDict)
+            successfulTests+=1
     else:
-        print("TIMED OUT")
+        print("No result returned")
         if addSomeDubs:
             # we've already tried it with and without www so give up.
             failedTests+=1
             toc = time.perf_counter()
-            saveResult(domain, False)
+            saveResult(domain, resultsDict)
         else:
             # do the test again but with www. prepended to the domain
             doATest(domain, True)
@@ -183,8 +191,9 @@ def doTheLoop():
     print("Selecting data...")
     # pick a domain at random
     # in the long term, the domains to test will be picked from a specific list, but for now we're testing ALL THE THINGS
-    # filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).
-    rows = session.query(domain_register).filter(domain_register.c.data_source=='National Archive, Feb 2020').order_by(func.random()).all()
+    query = session.query(domain_register).filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).order_by(func.random())
+    rows=query.all()
+    totalRows=query.count()
     for row in rows:
         print(row.domain_name)
         # check to see when we last tested this domain
@@ -196,7 +205,7 @@ def doTheLoop():
             totalTests+=1
             print()
             print("****************************")
-            print("Test number " , totalTests, ": ", row.domain_name)
+            print("Test number " , totalTests, " of ", totalRows, ": ", row.domain_name)
             print("****************************")
             doATest(row.domain_name, False)
             print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
