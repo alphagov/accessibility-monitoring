@@ -8,9 +8,35 @@ Our use-case is somewhat different in that we need to test _external_ websites a
 
 Having said that, the axe-core runs against any URL that is accessible from the computer that is running it - so that's any publicly accessible website.
 
-## Development history; reasoning for design decisions
+## Architecture
+There are two principal microservices involved so far:
+* axe-batch
+* axe-Runner
 
-### First forays
+In addition, there is a postgres database running as a service, containing two schema:
+* __pubsecdomains__ - contains all known (so far) domain names that belong to public sector organisations, together with supporting tables such as categories, sectors, geographical regions.
+* __a11ymon__ - contains the results of all testing done by the accessibility monitoring team, together with supporting tables such as axe error codes/types, WCAG rules.
+
+The database is administered either remotely via conduit or using an instance of pgadmin hosted in the same organisational space of PaaS.
+
+The whole system is hosted within [GOV.UK PaaS](https://www.cloud.service.gov.uk/) which provides security and load-balancing functions.
+
+### axe-Runner
+This is a node.js script that wraps around the axe API and Google's Puppeteer.  
+It takes as its input a single URL, and directs Puppeteer to that URL then injects the axe code into the website it finds and runs it, then returns the result.
+
+* Input: A single URL.
+* Output: JSON test results from axe, wrapped in custom JSON for reporting related information / errors.
+
+### axe-batch
+This is a python script that reads URLs from a postgres database, feeds them to axe-runner one at a time and processes the returned result, storing it as appropriate in a second postgres database.
+
+## Sequence Diagram
+![axe-batch sequence diagram](./architecture/diagrams/axe-batch-sequence.svg "axe-batch sequence diagram")
+
+# Development history; reasoning for design decisions
+
+## First forays
 
 Initially we used the [axe command line interface (CLI)](https://github.com/dequelabs/axe-cli) to generate machine-readable reports (in JSON).   
 We were able to create a shell script to run this as a batch process, and feed it a number of candidate websites.
@@ -25,7 +51,7 @@ However, shelling a CLI is also less than ideal for similar reasons.
 
 Enter [axe webdriverjs](https://github.com/dequelabs/axe-webdriverjs).
 
-### Webdriver + Selenium
+## Webdriver + Selenium
 
 The axe webdriver is a node library that "provides a chainable aXe API for Selenium's WebDriverJS and automatically injects into all frames."
 
@@ -53,7 +79,7 @@ The cause was simply that it wasn't being installed where Selenium expected it. 
 
 There is, in fact, a way around this using some shell scripting and fairly esoteric Cloud Foundry shenanigans, but this was getting more and more complex - and complexity makes a thing far harder to maintain.  That combined with the long list of dependencies (what would happen if the latest Chrome required another dependency?) was reason enough to find a third way...
 
-### Pulling strings
+## Pulling strings
 The Chrome DevTools team have created a marvellous thing called [Puppeteer](https://pptr.dev/):
 > Puppeteer is a Node library which provides a high-level API to control Chrome or Chromium over the DevTools Protocol. Puppeteer runs headless by default
 
