@@ -1,4 +1,5 @@
-import os, json, datetime, time, sys, getopt
+import os, json, datetime, time, sys, getopt, ssl
+import re
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData, Table, and_, or_
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -20,6 +21,7 @@ def axeRunner(dom2test):
     if axerunnerResult.status_code==200:
         return axerunnerResult.json()
     else:
+        print (axerunnerResult)
         errorDict = axerunnerResult.json()
         return errorDict
 
@@ -83,16 +85,18 @@ def saveResult(domain_name, resultsDict):
 
 
 """
-    doATest - run axe on the domain, parse the results, save 'em
+    doAxeTest - run axe on the domain, parse the results, save 'em
 """
-def doATest(domain, addSomeDubs):
+def doAxeTest(site, addSomeDubs):
     global successfulTests, failedTests
+    axeResult = 0
 
     if addSomeDubs:
-        # retrying the domain with www. prepended
-        domain = "www." + domain
+        # retrying the site with www. prepended
+        site = "www." + site
 
-    axeResult = axeRunner(domain)
+    axeResult = axeRunner(site)
+
     if axeResult:
         # print(axeResult)
         #resultsDict = ast.literal_eval(axeResult)
@@ -103,16 +107,16 @@ def doATest(domain, addSomeDubs):
             print(resultsDict["error"]["message"])
             failedTests+=1
             toc = time.perf_counter()
-            saveResult(domain, resultsDict)
+            saveResult(site, resultsDict)
             return(0)
         else:
             # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
             if resultsDict["url"]=="chrome-error://chromewebdata/":
                 failedTests+=1
                 toc = time.perf_counter()
-                saveResult(domain, resultsDict)
+                saveResult(site, resultsDict)
                 return(0)
-            saveResult(domain, resultsDict)
+            saveResult(site, resultsDict)
             successfulTests+=1
     else:
         print("No result returned")
@@ -120,10 +124,102 @@ def doATest(domain, addSomeDubs):
             # we've already tried it with and without www so give up.
             failedTests+=1
             toc = time.perf_counter()
-            saveResult(domain, resultsDict)
+            if http_response_valid:
+                saveResult(site, resultsDict)
+            ## todo: handle invalid http response.
         else:
-            # do the test again but with www. prepended to the domain
-            doATest(domain, True)
+            # do the test again but with www. prepended to the url
+            doAxeTest(site, True)
+
+"""
+    checkSiteExists - check the http response of the site; follow redirect(s recursively)
+"""
+def checkSiteExists(site, ssl):
+    redirect_url = ""
+    http_response_valid = 0
+
+    # first we'll see if it responds and check its http header
+    try:
+        if ssl:
+            r = requests.get("https://" + site, allow_redirects=False)
+        else:
+            r = requests.get("http://" + site, allow_redirects=False)
+
+        print(r.status_code)
+        # save the status_code before we do any redirecting shenanigans
+
+
+        if r.status_code > 300 and r.status_code < 400:
+            ## handle redirect
+            redirect_url = r.headers['location']
+            # if it's the same url but as https:// then we don't need to record anything new - it's the same domain/folder.
+            if redirect_url == "https://" + site or redirect_url == "https://" + site + "/":
+                # do nothing - it's going to get tested anyway
+                # just record that the http response was 3xx. # TODO
+                print("redirect is to " + redirect_url)
+            else:
+                print("need to redirect to " + redirect_url)
+                # check the new site that we've been redirected to
+                if "https://" in redirect_url:
+                    print("SSL recursing " + redirect_url[8:])
+                    checkSiteExists(redirect_url[8:],True)
+                else:
+                    print("recursing " + redirect_url[7:])
+                    checkSiteExists(redirect_url[7:], False)
+
+        if r.status_code < 300:
+            http_response_valid = True
+    except requests.exceptions.RequestException as e:
+        print(site + " failed to connect: ConnectionError=")
+        print(e)
+
+    if http_response_valid:
+        # see if we can get some info.
+        # title
+        print(re.findall('<title>(.*)</title>', r.text)[0])
+        # description
+        print(re.findall('<meta name="description" content="(.*)"', r.text))
+
+
+"""
+*******************************************
+doTheLoop - cycle through all sites to test
+*******************************************
+"""
+def doTheLoop():
+    global totalTests, tic, toc
+    print("Selecting data...")
+    # pick a url at random
+    # in the long term, the urls to test will be picked from a specific list, but for now we're testing ALL THE THINGS
+    ###query = session.query(domain_register).filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).order_by(func.random())
+    query = session.query(domain_register).order_by(func.random())
+    rows=query.all()
+    totalRows=query.count()
+    for row in rows:
+        print(row.domain_name)
+        # check to see when we last tested this url
+        oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
+        testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.domain_name==row.domain_name)).count()
+        if testedRows==0:
+            # we've not done this one within the last year so carry on
+            tic = time.perf_counter()
+            totalTests+=1
+            print()
+            print("****************************")
+            print("Test number " , totalTests, " of ", totalRows, ": ", row.domain_name)
+            print("****************************")
+            checkSiteExists(row.domain_name)
+            print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
+            print("Successful tests: ", successfulTests)
+            print("Failed tests: ", failedTests)
+            print("****************************")
+            print()
+
+    print(".")
+    print("****************************")
+    print("Total tests: " , totalTests)
+    print("****************************")
+
 
 """
 ******************
@@ -186,39 +282,6 @@ domain_register = Table('domain_register', metadata,
 )
 
 
-def doTheLoop():
-    global totalTests, tic, toc
-    print("Selecting data...")
-    # pick a domain at random
-    # in the long term, the domains to test will be picked from a specific list, but for now we're testing ALL THE THINGS
-    query = session.query(domain_register).filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).order_by(func.random())
-    rows=query.all()
-    totalRows=query.count()
-    for row in rows:
-        print(row.domain_name)
-        # check to see when we last tested this domain
-        oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
-        testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.domain_name==row.domain_name)).count()
-        if testedRows==0:
-            # we've not done this one within the last year so carry on
-            tic = time.perf_counter()
-            totalTests+=1
-            print()
-            print("****************************")
-            print("Test number " , totalTests, " of ", totalRows, ": ", row.domain_name)
-            print("****************************")
-            doATest(row.domain_name, False)
-            print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
-            print("Successful tests: ", successfulTests)
-            print("Failed tests: ", failedTests)
-            print("****************************")
-            print()
-
-    print(".")
-    print("****************************")
-    print("Total tests: " , totalTests)
-    print("****************************")
-
 
 def main(argv):
    singleDomain = ''
@@ -233,10 +296,11 @@ def main(argv):
           sys.exit()
      elif opt in ("-d", "--singleDomain"):
          singleDomain = arg
-         print ('domain to test is "', singleDomain)
+         print ('url to test is "', singleDomain)
 
    if singleDomain:
-       doATest(singleDomain, False)
+       checkSiteExists(singleDomain, False)
+       checkSiteExists(singleDomain, True)
    else:
        doTheLoop()
 
