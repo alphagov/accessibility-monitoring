@@ -83,6 +83,26 @@ def saveResult(domain_name, resultsDict):
                 test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "incomplete", "nodes": testItem["nodes"]})
         session.commit()
 
+"""
+    saveStatus - record http(s) status in domain_register table (only temporary while we use domain_register)
+"""
+def saveStatus(domain_name, ssl, status_code):
+    if ssl:
+        result = session.execute(domain_register.update().where(domain_register.c.domain_name==domain_name).values(https_status_code=status_code))
+    else:
+        result = session.execute(domain_register.update().where(domain_register.c.domain_name==domain_name).values(http_status_code=status_code))
+    session.commit()
+
+"""
+    saveInfo - record url and title + description in website register
+"""
+def saveInfo(url, title, description, original_domain):
+    result = session.execute(
+        "INSERT INTO pubsecdomains.website_register (url, htmlhead_title, htmlmeta_description, original_domain) VALUES (:url, :htmlhead_title, :htmlmeta_description, :original_domain) " \
+        "ON CONFLICT (url)" \
+        "DO UPDATE SET htmlhead_title = :htmlhead_title, htmlmeta_description = :htmlmeta_description;",
+        {"url":url, "htmlhead_title":title, "htmlmeta_description":description, "original_domain":original_domain})
+    session.commit()
 
 """
     doAxeTest - run axe on the domain, parse the results, save 'em
@@ -135,8 +155,11 @@ def doAxeTest(site, addSomeDubs):
     checkSiteExists - check the http response of the site; follow redirect(s recursively)
 """
 def checkSiteExists(site, ssl):
+    global domain_under_test
     redirect_url = ""
     http_response_valid = 0
+    htmlhead_title = ""
+    htmlmeta_description = ""
 
     # first we'll see if it responds and check its http header
     try:
@@ -145,26 +168,22 @@ def checkSiteExists(site, ssl):
         else:
             r = requests.get("http://" + site, allow_redirects=False)
 
-        print(r.status_code)
+        #print(r.status_code)
         # save the status_code before we do any redirecting shenanigans
-
+        saveStatus(site, ssl, r.status_code)
 
         if r.status_code > 300 and r.status_code < 400:
             ## handle redirect
             redirect_url = r.headers['location']
             # if it's the same url but as https:// then we don't need to record anything new - it's the same domain/folder.
-            if redirect_url == "https://" + site or redirect_url == "https://" + site + "/":
-                # do nothing - it's going to get tested anyway
-                # just record that the http response was 3xx. # TODO
-                print("redirect is to " + redirect_url)
-            else:
-                print("need to redirect to " + redirect_url)
+            if redirect_url != "https://" + site and redirect_url != "https://" + site + "/":
+                #print("need to redirect to " + redirect_url)
                 # check the new site that we've been redirected to
                 if "https://" in redirect_url:
-                    print("SSL recursing " + redirect_url[8:])
+                    #print("SSL recursing " + redirect_url[8:])
                     checkSiteExists(redirect_url[8:],True)
                 else:
-                    print("recursing " + redirect_url[7:])
+                    #print("recursing " + redirect_url[7:])
                     checkSiteExists(redirect_url[7:], False)
 
         if r.status_code < 300:
@@ -176,9 +195,17 @@ def checkSiteExists(site, ssl):
     if http_response_valid:
         # see if we can get some info.
         # title
-        print(re.findall('<title>(.*)</title>', r.text)[0])
+        htmlheadTitleDict = re.findall('<title>(.*)</title>', r.text)
+        if len(htmlheadTitleDict)>0:
+            htmlhead_title = htmlheadTitleDict[0]
         # description
-        print(re.findall('<meta name="description" content="(.*)"', r.text))
+        htmlmetaDescriptionDict = re.findall('<meta name="description" content="(.*)"', r.text)
+        if len(htmlmetaDescriptionDict)>0:
+            htmlmeta_description = htmlmetaDescriptionDict[0]
+
+        saveInfo(r.url, htmlhead_title, htmlmeta_description, domain_under_test)
+
+
 
 
 """
@@ -230,6 +257,8 @@ script entry point
 # taken from local environment variable in the format postgresql+psycopg2://localuser:localuser@localhost/a11ymon
 CONNECTION_URI = os.getenv("DATABASE_URL")
 
+domain_under_test = ""
+
 print("Connecting to database...")
 engine = create_engine(CONNECTION_URI)
 
@@ -249,6 +278,7 @@ metadata.reflect(bind=engine, schema='a11ymon')
 test_header = metadata.tables['a11ymon.testresult_axe_header']
 test_data = metadata.tables['a11ymon.testresult_axe_data']
 domain_register = metadata.tables['pubsecdomains.domain_register']
+website_register = metadata.tables['pubsecdomains.website_register']
 
 # need to override the reflected definition of these as it fails to recognise the auto-increment :(
 test_header = Table('testresult_axe_header', metadata,
@@ -281,16 +311,26 @@ domain_register = Table('domain_register', metadata,
     extend_existing=True
 )
 
+website_register = Table('website_register', metadata,
+    Column('website_id',Integer, primary_key=True, autoincrement=True),
+    Column('url', String),
+    Column('htmlhead_title', String),
+    Column('htmlmeta_description',String),
+    schema='pubsecdomains',
+    extend_existing=True
+)
+
 
 
 def main(argv):
-   singleDomain = ''
-   try:
+    global domain_under_test
+    singleDomain = ''
+    try:
       opts, args = getopt.getopt(argv,"hd:",["singleDomain="])
-   except getopt.GetoptError:
+    except getopt.GetoptError:
       print ('axerunner.py -d <domain_name>')
       sys.exit(2)
-   for opt, arg in opts:
+    for opt, arg in opts:
      if opt == '-h':
           print ('axerunner.py -d <domain_name>')
           sys.exit()
@@ -298,10 +338,11 @@ def main(argv):
          singleDomain = arg
          print ('url to test is "', singleDomain)
 
-   if singleDomain:
+    if singleDomain:
+       domain_under_test = singleDomain
        checkSiteExists(singleDomain, False)
        checkSiteExists(singleDomain, True)
-   else:
+    else:
        doTheLoop()
 
 
