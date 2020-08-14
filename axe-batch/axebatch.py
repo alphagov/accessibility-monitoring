@@ -8,6 +8,7 @@ from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSON
 
 import requests
+import urllib3
 
 totalTests = 0
 successfulTests = 0
@@ -155,36 +156,49 @@ def doAxeTest(site, addSomeDubs):
     checkSiteExists - check the http response of the site; follow redirect(s recursively)
 """
 def checkSiteExists(site, ssl):
-    global domain_under_test
+    global domain_under_test, destination_url
+    destination_url = ""
     redirect_url = ""
     http_response_valid = 0
     htmlhead_title = ""
     htmlmeta_description = ""
 
+    print("checkSiteExists(" + site + ", " + ("True)" if ssl else "False)"))
     # first we'll see if it responds and check its http header
     try:
         if ssl:
-            r = requests.get("https://" + site, allow_redirects=False)
+            # we can't rely on the target having a correctly configured SSL cert, so we'll disable verification.
+            # Normally this would be dangerous, but we're only fetching the response status and 2 specific html elements
+            urllib3.disable_warnings()
+            r = requests.get("https://" + site, allow_redirects=False, verify=False)
         else:
             r = requests.get("http://" + site, allow_redirects=False)
 
-        #print(r.status_code)
         # save the status_code before we do any redirecting shenanigans
         saveStatus(site, ssl, r.status_code)
 
         if r.status_code > 300 and r.status_code < 400:
             ## handle redirect
             redirect_url = r.headers['location']
-            # if it's the same url but as https:// then we don't need to record anything new - it's the same domain/folder.
-            if redirect_url != "https://" + site and redirect_url != "https://" + site + "/":
-                #print("need to redirect to " + redirect_url)
-                # check the new site that we've been redirected to
-                if "https://" in redirect_url:
-                    #print("SSL recursing " + redirect_url[8:])
+
+            # check if it's just a directory
+            if redirect_url[0] == '/':
+                checkSiteExists(site + redirect_url, ssl)
+            else:
+                # if it's the same url but as https:// then we don't need to record anything new - it's the same domain/folder.
+                if redirect_url == "https://" + site or redirect_url == "https://" + site + "/":
+                    # same url but https
+                    print("SSL recursing (1) " + redirect_url[8:])
                     checkSiteExists(redirect_url[8:],True)
                 else:
-                    #print("recursing " + redirect_url[7:])
-                    checkSiteExists(redirect_url[7:], False)
+                    print("need to redirect to " + redirect_url)
+                    # check the new site that we've been redirected to
+                    if "https://" in redirect_url:
+                        print("SSL recursing (2)" + redirect_url[8:])
+                        checkSiteExists(redirect_url[8:],True)
+                    else:
+                        print("recursing " + redirect_url[7:])
+                        checkSiteExists(redirect_url[7:], False)
 
         if r.status_code < 300:
             http_response_valid = True
@@ -193,18 +207,21 @@ def checkSiteExists(site, ssl):
         print(e)
 
     if http_response_valid:
-        # see if we can get some info.
+        # see if we can get some info. NB use ([\s\S]*?) instead of (?s)(.*) as the latter is greedy and matches the entire page
         # title
-        htmlheadTitleDict = re.findall('<title>(.*)</title>', r.text)
+        htmlheadTitleDict = re.findall('<title>([\s\S]*?)</title>', r.text)
         if len(htmlheadTitleDict)>0:
-            htmlhead_title = htmlheadTitleDict[0]
+            htmlhead_title = htmlheadTitleDict[0].strip()
+            #print(htmlhead_title)
         # description
-        htmlmetaDescriptionDict = re.findall('<meta name="description" content="(.*)"', r.text)
+        htmlmetaDescriptionDict = re.findall('<meta name="description" content="([\s\S]*?)"', r.text)
         if len(htmlmetaDescriptionDict)>0:
-            htmlmeta_description = htmlmetaDescriptionDict[0]
+            htmlmeta_description = htmlmetaDescriptionDict[0].strip()
+            #print(htmlmeta_description)
 
+        destination_url = r.url
         saveInfo(r.url, htmlhead_title, htmlmeta_description, domain_under_test)
-
+        print("Resolved destination = " + destination_url)
 
 
 
@@ -336,7 +353,7 @@ def main(argv):
           sys.exit()
      elif opt in ("-d", "--singleDomain"):
          singleDomain = arg
-         print ('url to test is "', singleDomain)
+         print ('single url to test is ', singleDomain)
 
     if singleDomain:
        domain_under_test = singleDomain
