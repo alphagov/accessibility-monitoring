@@ -17,12 +17,10 @@ tic=0
 toc=0
 
 def axeRunner(dom2test):
-    print("testing ", dom2test)
-    axerunnerResult = requests.get('https://axerunner.london.cloudapps.digital', params={'targetURL':'http://' + dom2test})
+    axerunnerResult = requests.get('https://axerunner.london.cloudapps.digital', params={'targetURL':dom2test})
     if axerunnerResult.status_code==200:
         return axerunnerResult.json()
     else:
-        print (axerunnerResult)
         errorDict = axerunnerResult.json()
         return errorDict
 
@@ -93,6 +91,7 @@ def saveStatus(domain_name, ssl, status_code):
     else:
         result = session.execute(domain_register.update().where(domain_register.c.domain_name==domain_name).values(http_status_code=status_code))
     session.commit()
+    print(result.last_updated_params())
 
 """
     saveInfo - record url and title + description in website register
@@ -111,6 +110,7 @@ def saveInfo(url, title, description, original_domain):
 def doAxeTest(site, addSomeDubs):
     global successfulTests, failedTests
     axeResult = 0
+    resultsDict = {"error":{"message": "Axe returned no result"}}
 
     if addSomeDubs:
         # retrying the site with www. prepended
@@ -119,12 +119,9 @@ def doAxeTest(site, addSomeDubs):
     axeResult = axeRunner(site)
 
     if axeResult:
-        # print(axeResult)
-        #resultsDict = ast.literal_eval(axeResult)
         resultsDict = axeResult
         print(len(resultsDict))
         if "error" in resultsDict:
-            #print (json.dumps(resultsDict,  indent=4))
             print(resultsDict["error"]["message"])
             failedTests+=1
             toc = time.perf_counter()
@@ -145,8 +142,7 @@ def doAxeTest(site, addSomeDubs):
             # we've already tried it with and without www so give up.
             failedTests+=1
             toc = time.perf_counter()
-            if http_response_valid:
-                saveResult(site, resultsDict)
+            saveResult(site, resultsDict)
             ## todo: handle invalid http response.
         else:
             # do the test again but with www. prepended to the url
@@ -163,19 +159,23 @@ def checkSiteExists(site, ssl):
     htmlhead_title = ""
     htmlmeta_description = ""
 
-    print("checkSiteExists(" + site + ", " + ("True)" if ssl else "False)"))
+    ##print("checkSiteExists(" + site + ", " + ("True)" if ssl else "False)"))
     # first we'll see if it responds and check its http header
     try:
+        # fudge the headers. Some sites reject the request if they don't recognise the user agent
+        headers = {'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.125 Safari/537.36'}
         if ssl:
-            # we can't rely on the target having a correctly configured SSL cert, so we'll disable verification.
+            # we can't rely on the target having correctly configured SSL, so we'll disable verification.
             # Normally this would be dangerous, but we're only fetching the response status and 2 specific html elements
             urllib3.disable_warnings()
-            r = requests.get("https://" + site, allow_redirects=False, verify=False)
+            r = requests.get("https://" + site, allow_redirects=False, verify=False, timeout=15, headers=headers)
         else:
-            r = requests.get("http://" + site, allow_redirects=False)
+            r = requests.get("http://" + site, allow_redirects=False, timeout=15, headers=headers)
 
         # save the status_code before we do any redirecting shenanigans
-        saveStatus(site, ssl, r.status_code)
+        # We can sometimes get a different status from domain.com and www.domain.com, so only record the former
+        if site[0:4] != 'www.':
+            saveStatus(domain_under_test, ssl, r.status_code)
 
         if r.status_code > 300 and r.status_code < 400:
             ## handle redirect
@@ -188,23 +188,29 @@ def checkSiteExists(site, ssl):
                 # if it's the same url but as https:// then we don't need to record anything new - it's the same domain/folder.
                 if redirect_url == "https://" + site or redirect_url == "https://" + site + "/":
                     # same url but https
-                    print("SSL recursing (1) " + redirect_url[8:])
                     checkSiteExists(redirect_url[8:],True)
                 else:
-                    print("need to redirect to " + redirect_url)
                     # check the new site that we've been redirected to
                     if "https://" in redirect_url:
-                        print("SSL recursing (2)" + redirect_url[8:])
                         checkSiteExists(redirect_url[8:],True)
                     else:
-                        print("recursing " + redirect_url[7:])
                         checkSiteExists(redirect_url[7:], False)
 
-        if r.status_code < 300:
+        elif r.status_code < 300:
             http_response_valid = True
+
+        else:
+            # >400. Do nothing as the status code will already have been recorded. There's nothing more to do.
+            print("website fail")
+            print(r.headers)
+
+
     except requests.exceptions.RequestException as e:
         print(site + " failed to connect: ConnectionError=")
         print(e)
+        # try it with dubs on it
+        if site[0:4] != 'www.':
+            checkSiteExists('www.' + site, ssl)
 
     if http_response_valid:
         # see if we can get some info. NB use ([\s\S]*?) instead of (?s)(.*) as the latter is greedy and matches the entire page
@@ -212,16 +218,18 @@ def checkSiteExists(site, ssl):
         htmlheadTitleDict = re.findall('<title>([\s\S]*?)</title>', r.text)
         if len(htmlheadTitleDict)>0:
             htmlhead_title = htmlheadTitleDict[0].strip()
-            #print(htmlhead_title)
         # description
         htmlmetaDescriptionDict = re.findall('<meta name="description" content="([\s\S]*?)"', r.text)
         if len(htmlmetaDescriptionDict)>0:
             htmlmeta_description = htmlmetaDescriptionDict[0].strip()
-            #print(htmlmeta_description)
 
-        destination_url = r.url
-        saveInfo(r.url, htmlhead_title, htmlmeta_description, domain_under_test)
+        # save the stuff. But strip off default port numbers from URLs first.
+        destination_url = re.sub(":80", "", r.url)
+        destination_url = re.sub(":443", "", r.url)
+
+        saveInfo(destination_url, htmlhead_title, htmlmeta_description, domain_under_test)
         print("Resolved destination = " + destination_url)
+        doAxeTest(destination_url, False)
 
 
 
@@ -342,6 +350,7 @@ website_register = Table('website_register', metadata,
 def main(argv):
     global domain_under_test
     singleDomain = ''
+
     try:
       opts, args = getopt.getopt(argv,"hd:",["singleDomain="])
     except getopt.GetoptError:
