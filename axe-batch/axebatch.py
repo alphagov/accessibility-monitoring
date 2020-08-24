@@ -184,6 +184,8 @@ def checkSiteExists(site, ssl):
             # check if it's just a directory
             if redirect_url[0] == '/':
                 checkSiteExists(site + redirect_url, ssl)
+            elif  redirect_url[0] == '.':
+                checkSiteExists(site + redirect_url[1:], ssl)
             else:
                 # if it's the same url but as https:// then we don't need to record anything new - it's the same domain/folder.
                 if redirect_url == "https://" + site or redirect_url == "https://" + site + "/":
@@ -249,6 +251,7 @@ def doTheLoop():
     totalRows=query.count()
     for row in rows:
         print(row.domain_name)
+        # see if it's alive...
         # check to see when we last tested this url
         oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
         testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.domain_name==row.domain_name)).count()
@@ -256,11 +259,13 @@ def doTheLoop():
             # we've not done this one within the last year so carry on
             tic = time.perf_counter()
             totalTests+=1
+            domain_under_test = row.domain_name
             print()
             print("****************************")
             print("Test number " , totalTests, " of ", totalRows, ": ", row.domain_name)
             print("****************************")
-            checkSiteExists(row.domain_name)
+            checkSiteExists(row.domain_name, False)
+            checkSiteExists(row.domain_name, True)
             print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
             print("Successful tests: ", successfulTests)
             print("Failed tests: ", failedTests)
