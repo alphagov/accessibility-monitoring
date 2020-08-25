@@ -10,6 +10,17 @@ from sqlalchemy.dialects.postgresql import JSON
 import requests
 import urllib3
 
+import logging
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
+
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+ch = logging.StreamHandler()
+ch.setLevel(logging.WARNING)
+ch.setFormatter(formatter)
+logger.addHandler(ch)
+
 totalTests = 0
 successfulTests = 0
 failedTests = 0
@@ -41,7 +52,7 @@ def saveResult(domain_name, resultsDict):
         test_id = result.inserted_primary_key[0]
         session.commit()
     else :
-        print(json.dumps(resultsDict["url"], indent=3), toc-tic, "seconds")
+        #logger.info(json.dumps(resultsDict["url"], indent=3), toc-tic, "seconds")
 
         result = session.execute(
             test_header.insert(), {"test_timestamp": resultsDict["timestamp"], "url": resultsDict["url"], "domain_name": domain_name, "axe_version": resultsDict["testEngine"]["version"], "test_environment": resultsDict["testEnvironment"], "time_taken": toc-tic, "test_succeeded": True})
@@ -91,7 +102,7 @@ def saveStatus(domain_name, ssl, status_code):
     else:
         result = session.execute(domain_register.update().where(domain_register.c.domain_name==domain_name).values(http_status_code=status_code))
     session.commit()
-    print(result.last_updated_params())
+    logger.debug(result.last_updated_params())
 
 """
     saveInfo - record url and title + description in website register
@@ -120,9 +131,8 @@ def doAxeTest(site, addSomeDubs):
 
     if axeResult:
         resultsDict = axeResult
-        print(len(resultsDict))
         if "error" in resultsDict:
-            print(resultsDict["error"]["message"])
+            logger.info(resultsDict["error"]["message"])
             failedTests+=1
             toc = time.perf_counter()
             saveResult(site, resultsDict)
@@ -137,7 +147,7 @@ def doAxeTest(site, addSomeDubs):
             saveResult(site, resultsDict)
             successfulTests+=1
     else:
-        print("No result returned")
+        logger.info("No result returned")
         if addSomeDubs:
             # we've already tried it with and without www so give up.
             failedTests+=1
@@ -154,12 +164,13 @@ def doAxeTest(site, addSomeDubs):
 def checkSiteExists(site, ssl):
     global domain_under_test, destination_url
     destination_url = ""
-    redirect_url = ""
     http_response_valid = 0
     htmlhead_title = ""
     htmlmeta_description = ""
 
-    ##print("checkSiteExists(" + site + ", " + ("True)" if ssl else "False)"))
+
+    logging.info("checkSiteExists(" + site + ", " + ("SSL=True)" if ssl else "SSL=False)"))
+
     # first we'll see if it responds and check its http header
     try:
         # fudge the headers. Some sites reject the request if they don't recognise the user agent
@@ -172,6 +183,9 @@ def checkSiteExists(site, ssl):
         else:
             r = requests.get("http://" + site, allow_redirects=False, timeout=15, headers=headers)
 
+        logger.debug(r.status_code)
+        logger.debug(r.headers)
+
         # save the status_code before we do any redirecting shenanigans
         # We can sometimes get a different status from domain.com and www.domain.com, so only record the former
         if site[0:4] != 'www.':
@@ -181,35 +195,47 @@ def checkSiteExists(site, ssl):
             ## handle redirect
             redirect_url = r.headers['location']
 
-            # check if it's just a directory
+            # check if it's just a directory - starts with / or /.
             if redirect_url[0] == '/':
-                checkSiteExists(site + redirect_url, ssl)
+                # just make sure that there's not a / on the end of the site already...
+                if site[-1] == '/': site = site[0:-1]
+                redirect_url = site + redirect_url
+                logger.debug("A redirecting to " + redirect_url)
+                checkSiteExists(redirect_url, ssl)
             elif  redirect_url[0] == '.':
-                checkSiteExists(site + redirect_url[1:], ssl)
+                redirect_url = site + redirect_url[1:]
+                logger.debug("B redirecting to " + redirect_url)
+                checkSiteExists(redirect_url, ssl)
             else:
                 # if it's the same url but as https:// then we don't need to record anything new - it's the same domain/folder.
                 if redirect_url == "https://" + site or redirect_url == "https://" + site + "/":
                     # same url but https
-                    checkSiteExists(redirect_url[8:],True)
+                    redirect_url = redirect_url[8:]
+                    logger.debug("C redirecting to " + redirect_url)
+                    checkSiteExists(redirect_url,True)
                 else:
                     # check the new site that we've been redirected to
                     if "https://" in redirect_url:
-                        checkSiteExists(redirect_url[8:],True)
+                        redirect_url = redirect_url[8:]
+                        logger.debug("D redirecting to " + redirect_url)
+                        checkSiteExists(redirect_url,True)
                     else:
-                        checkSiteExists(redirect_url[7:], False)
+                        redirect_url = redirect_url[7:]
+                        logger.debug("E redirecting to " + redirect_url)
+                        checkSiteExists(redirect_url, False)
 
         elif r.status_code < 300:
             http_response_valid = True
 
         else:
             # >400. Do nothing as the status code will already have been recorded. There's nothing more to do.
-            print("website fail")
-            print(r.headers)
+            logger.info("website fail")
+            logger.info(r.headers)
 
 
     except requests.exceptions.RequestException as e:
-        print(site + " failed to connect: ConnectionError=")
-        print(e)
+        logger.warning(site + " failed to connect: ConnectionError=")
+        logger.warning(e)
         # try it with dubs on it
         if site[0:4] != 'www.':
             checkSiteExists('www.' + site, ssl)
@@ -230,7 +256,7 @@ def checkSiteExists(site, ssl):
         destination_url = re.sub(":443", "", r.url)
 
         saveInfo(destination_url, htmlhead_title, htmlmeta_description, domain_under_test)
-        print("Resolved destination = " + destination_url)
+        logger.info("Resolved destination = " + destination_url)
         doAxeTest(destination_url, False)
 
 
@@ -242,7 +268,9 @@ doTheLoop - cycle through all sites to test
 """
 def doTheLoop():
     global totalTests, tic, toc
-    print("Selecting data...")
+    global domain_under_test
+
+    logger.info("Selecting data...")
     # pick a url at random
     # in the long term, the urls to test will be picked from a specific list, but for now we're testing ALL THE THINGS
     ###query = session.query(domain_register).filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).order_by(func.random())
@@ -264,6 +292,7 @@ def doTheLoop():
             print("****************************")
             print("Test number " , totalTests, " of ", totalRows, ": ", row.domain_name)
             print("****************************")
+            domain_under_test = row.domain_name
             checkSiteExists(row.domain_name, False)
             checkSiteExists(row.domain_name, True)
             print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
