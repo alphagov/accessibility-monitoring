@@ -9,15 +9,16 @@ from sqlalchemy.dialects.postgresql import JSON
 
 import requests
 import urllib3
+from urllib.parse import urlparse
 
 import logging
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 ch = logging.StreamHandler()
-ch.setLevel(logging.WARNING)
+ch.setLevel(logging.DEBUG)
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
@@ -194,16 +195,26 @@ def checkSiteExists(site, ssl):
         if r.status_code > 300 and r.status_code < 400:
             ## handle redirect
             redirect_url = r.headers['location']
+            if redirect_url == site or redirect_url == 'https://' + site or redirect_url == 'http://' + site:
+                # don't infinitely recurse! Dis site ar brokened!
+                return ""
+
+            pos = site.find('/')
+            if pos >0:
+                server = site[0:pos-1]
+            else:
+                server = site
 
             # check if it's just a directory - starts with / or /.
             if redirect_url[0] == '/':
+                ###### append the location to the server (not the whole URL!)
                 # just make sure that there's not a / on the end of the site already...
-                if site[-1] == '/': site = site[0:-1]
-                redirect_url = site + redirect_url
+                redirect_url = server + redirect_url
+                logger.debug("A site= " + site)
                 logger.debug("A redirecting to " + redirect_url)
                 checkSiteExists(redirect_url, ssl)
             elif  redirect_url[0] == '.':
-                redirect_url = site + redirect_url[1:]
+                redirect_url = server + redirect_url[1:]
                 logger.debug("B redirecting to " + redirect_url)
                 checkSiteExists(redirect_url, ssl)
             else:
@@ -257,7 +268,8 @@ def checkSiteExists(site, ssl):
 
         saveInfo(destination_url, htmlhead_title, htmlmeta_description, domain_under_test)
         logger.info("Resolved destination = " + destination_url)
-        doAxeTest(destination_url, False)
+
+        return destination_url
 
 
 
@@ -279,20 +291,21 @@ def doTheLoop():
     totalRows=query.count()
     for row in rows:
         print(row.domain_name)
-        # see if it's alive...
+        domain_under_test = row.domain_name
+
         # check to see when we last tested this url
         oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
+        #oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=1) # <-- temporary while we populate the website_register table with contents of domain_register
         testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.domain_name==row.domain_name)).count()
         if testedRows==0:
             # we've not done this one within the last year so carry on
             tic = time.perf_counter()
             totalTests+=1
-            domain_under_test = row.domain_name
             print()
             print("****************************")
             print("Test number " , totalTests, " of ", totalRows, ": ", row.domain_name)
             print("****************************")
-            domain_under_test = row.domain_name
+            # we always test both http and https as sometimes the two end up at different sites. No, really! IKR?!
             checkSiteExists(row.domain_name, False)
             checkSiteExists(row.domain_name, True)
             print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
