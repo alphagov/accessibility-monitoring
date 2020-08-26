@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import logging
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.WARNING)
 
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
@@ -99,11 +99,15 @@ def saveResult(domain_name, resultsDict):
 """
 def saveStatus(domain_name, ssl, status_code):
     if ssl:
-        result = session.execute(domain_register.update().where(domain_register.c.domain_name==domain_name).values(https_status_code=status_code))
+        result = session.execute(
+            "UPDATE pubsecdomains.domain_register SET https_status_code=:status_code, last_updated=NOW() WHERE domain_name=:domain_name",
+            {"status_code":status_code, "domain_name":domain_name})
     else:
-        result = session.execute(domain_register.update().where(domain_register.c.domain_name==domain_name).values(http_status_code=status_code))
+        result = session.execute(
+            "UPDATE pubsecdomains.domain_register SET http_status_code=:status_code, last_updated=NOW() WHERE domain_name=:domain_name",
+            {"status_code": status_code, "domain_name": domain_name})
     session.commit()
-    logger.debug(result.last_updated_params())
+    logger.debug(result)
 
 """
     saveInfo - record url and title + description in website register
@@ -111,8 +115,8 @@ def saveStatus(domain_name, ssl, status_code):
 def saveInfo(url, title, description, original_domain):
     result = session.execute(
         "INSERT INTO pubsecdomains.website_register (url, htmlhead_title, htmlmeta_description, original_domain) VALUES (:url, :htmlhead_title, :htmlmeta_description, :original_domain) " \
-        "ON CONFLICT (url)" \
-        "DO UPDATE SET htmlhead_title = :htmlhead_title, htmlmeta_description = :htmlmeta_description;",
+        "ON CONFLICT (url)" 
+        "DO UPDATE SET htmlhead_title = :htmlhead_title, htmlmeta_description = :htmlmeta_description, last_updated=NOW();",
         {"url":url, "htmlhead_title":title, "htmlmeta_description":description, "original_domain":original_domain})
     session.commit()
 
@@ -168,7 +172,15 @@ def checkSiteExists(site, ssl):
     http_response_valid = 0
     htmlhead_title = ""
     htmlmeta_description = ""
+    r = {}
+    timeout = 30
 
+    # the server variable is the domain portion without anything after a /
+    pos = site.find('/')
+    if pos > 0:
+        server = site[0:pos - 1]
+    else:
+        server = site
 
     logging.info("checkSiteExists(" + site + ", " + ("SSL=True)" if ssl else "SSL=False)"))
 
@@ -180,13 +192,21 @@ def checkSiteExists(site, ssl):
             # we can't rely on the target having correctly configured SSL, so we'll disable verification.
             # Normally this would be dangerous, but we're only fetching the response status and 2 specific html elements
             urllib3.disable_warnings()
-            r = requests.get("https://" + site, allow_redirects=False, verify=False, timeout=15, headers=headers)
+            r = requests.get("https://" + site, allow_redirects=False, verify=False, timeout=timeout, headers=headers)
         else:
-            r = requests.get("http://" + site, allow_redirects=False, timeout=15, headers=headers)
+            r = requests.get("http://" + site, allow_redirects=False, timeout=timeout, headers=headers)
 
         logger.debug(r.status_code)
         logger.debug(r.headers)
 
+    except requests.exceptions.RequestException as e:
+        logger.info(site + " failed to connect: ConnectionError=")
+        logger.info(e)
+        # try it with dubs on it
+        if site[0:4] != 'www.':
+            checkSiteExists('www.' + site, ssl)
+
+    if r:
         # save the status_code before we do any redirecting shenanigans
         # We can sometimes get a different status from domain.com and www.domain.com, so only record the former
         if site[0:4] != 'www.':
@@ -198,12 +218,15 @@ def checkSiteExists(site, ssl):
             if redirect_url == site or redirect_url == 'https://' + site or redirect_url == 'http://' + site:
                 # don't infinitely recurse! Dis site ar brokened!
                 return ""
-
-            pos = site.find('/')
-            if pos >0:
-                server = site[0:pos-1]
-            else:
-                server = site
+            # if the redirect URL is the domain name WITHOUT the www (and we're trying with) then it'll recurse infinitely
+            # (because we always try adding www. if a server times out). Best not do that. (sirthomasabney.hackney.sch.uk is an example of this)
+            redirect_sans_scheme = redirect_url
+            pos = redirect_url.find('://')
+            if pos > -1: redirect_sans_scheme = redirect_url[pos+3:]
+            if site[0:4] == 'www.' and (redirect_sans_scheme == site[4:] or redirect_sans_scheme == site[4:] + '/'):
+                # don't infinitely recurse! Dis site ar brokened!
+                logger.info("URL redirects to already tested URL (sans-www)")
+                return ""
 
             # check if it's just a directory - starts with / or /.
             if redirect_url[0] == '/':
@@ -244,12 +267,6 @@ def checkSiteExists(site, ssl):
             logger.info(r.headers)
 
 
-    except requests.exceptions.RequestException as e:
-        logger.warning(site + " failed to connect: ConnectionError=")
-        logger.warning(e)
-        # try it with dubs on it
-        if site[0:4] != 'www.':
-            checkSiteExists('www.' + site, ssl)
 
     if http_response_valid:
         # see if we can get some info. NB use ([\s\S]*?) instead of (?s)(.*) as the latter is greedy and matches the entire page
@@ -290,7 +307,7 @@ def doTheLoop():
     rows=query.all()
     totalRows=query.count()
     for row in rows:
-        print(row.domain_name)
+        print("Testing " + row.domain_name)
         domain_under_test = row.domain_name
 
         # check to see when we last tested this url
