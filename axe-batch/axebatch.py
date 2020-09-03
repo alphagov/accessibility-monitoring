@@ -27,6 +27,8 @@ successfulTests = 0
 failedTests = 0
 tic=0
 toc=0
+destination_url = ""
+
 
 def axeRunner(dom2test):
     axerunnerResult = requests.get('https://axerunner.london.cloudapps.digital', params={'targetURL':dom2test})
@@ -124,9 +126,10 @@ def saveInfo(url, title, description, original_domain):
     doAxeTest - run axe on the domain, parse the results, save 'em
 """
 def doAxeTest(site, addSomeDubs):
-    global successfulTests, failedTests
+    global successfulTests, failedTests, domain_under_test
     axeResult = 0
     resultsDict = {"error":{"message": "Axe returned no result"}}
+    logger.debug("doAxeTest " + site)
 
     if addSomeDubs:
         # retrying the site with www. prepended
@@ -140,7 +143,7 @@ def doAxeTest(site, addSomeDubs):
             logger.info(resultsDict["error"]["message"])
             failedTests+=1
             toc = time.perf_counter()
-            saveResult(site, resultsDict)
+            saveResult(domain_under_test, resultsDict)
             return(0)
         else:
             # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
@@ -149,26 +152,23 @@ def doAxeTest(site, addSomeDubs):
                 toc = time.perf_counter()
                 saveResult(site, resultsDict)
                 return(0)
-            saveResult(site, resultsDict)
+            saveResult(domain_under_test, resultsDict)
             successfulTests+=1
+
     else:
         logger.info("No result returned")
-        if addSomeDubs:
-            # we've already tried it with and without www so give up.
-            failedTests+=1
-            toc = time.perf_counter()
-            saveResult(site, resultsDict)
-            ## todo: handle invalid http response.
-        else:
-            # do the test again but with www. prepended to the url
-            doAxeTest(site, True)
+        # we've already tried it with and without www so give up.
+        failedTests+=1
+        toc = time.perf_counter()
+        saveResult(domain_under_test, resultsDict)
+
 
 """
     checkSiteExists - check the http response of the site; follow redirect(s recursively)
 """
 def checkSiteExists(site, ssl):
     global domain_under_test, destination_url
-    destination_url = ""
+    global successfulTests, failedTests
     http_response_valid = 0
     htmlhead_title = ""
     htmlmeta_description = ""
@@ -182,7 +182,8 @@ def checkSiteExists(site, ssl):
     else:
         server = site
 
-    logging.info("checkSiteExists(" + site + ", " + ("SSL=True)" if ssl else "SSL=False)"))
+    #logger.info("checkSiteExists(" + site + ", " + ("SSL=True)" if ssl else "SSL=False)"))
+
 
     # first we'll see if it responds and check its http header
     try:
@@ -233,7 +234,6 @@ def checkSiteExists(site, ssl):
                 ###### append the location to the server (not the whole URL!)
                 # just make sure that there's not a / on the end of the site already...
                 redirect_url = server + redirect_url
-                logger.debug("A site= " + site)
                 logger.debug("A redirecting to " + redirect_url)
                 checkSiteExists(redirect_url, ssl)
             elif  redirect_url[0] == '.':
@@ -287,6 +287,8 @@ def checkSiteExists(site, ssl):
         logger.info("Resolved destination = " + destination_url)
 
         return destination_url
+    else:
+        return ""
 
 
 
@@ -296,7 +298,7 @@ doTheLoop - cycle through all sites to test
 *******************************************
 """
 def doTheLoop():
-    global totalTests, tic, toc
+    global totalTests, tic, toc, successfulTests, failedTests
     global domain_under_test
 
     logger.info("Selecting data...")
@@ -322,9 +324,11 @@ def doTheLoop():
             print("****************************")
             print("Test number " , totalTests, " of ", totalRows, ": ", row.domain_name)
             print("****************************")
-            # we always test both http and https as sometimes the two end up at different sites. No, really! IKR?!
-            checkSiteExists(row.domain_name, False)
+            # try SSL first. If that doesn't resolve to a final URL, try without
             checkSiteExists(row.domain_name, True)
+            if destination_url == "":
+                checkSiteExists(row.domain_name, False)
+            doAxeTest(destination_url, False)
             print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
             print("Successful tests: ", successfulTests)
             print("Failed tests: ", failedTests)
@@ -430,8 +434,11 @@ def main(argv):
 
     if singleDomain:
        domain_under_test = singleDomain
-       checkSiteExists(singleDomain, False)
        checkSiteExists(singleDomain, True)
+       if destination_url == "":
+           checkSiteExists(singleDomain, False)
+       doAxeTest(destination_url, False)
+
     else:
        doTheLoop()
 
