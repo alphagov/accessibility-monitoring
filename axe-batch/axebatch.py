@@ -102,11 +102,11 @@ def saveResult(domain_name, resultsDict):
 def saveStatus(domain_name, ssl, status_code):
     if ssl:
         result = session.execute(
-            "UPDATE pubsecdomains.domain_register SET https_status_code=:status_code, last_updated=NOW() WHERE domain_name=:domain_name",
+            "UPDATE pubsecweb.domain_register SET https_status_code=:status_code, last_updated=NOW() WHERE domain_name=:domain_name",
             {"status_code":status_code, "domain_name":domain_name})
     else:
         result = session.execute(
-            "UPDATE pubsecdomains.domain_register SET http_status_code=:status_code, last_updated=NOW() WHERE domain_name=:domain_name",
+            "UPDATE pubsecweb.domain_register SET http_status_code=:status_code, last_updated=NOW() WHERE domain_name=:domain_name",
             {"status_code": status_code, "domain_name": domain_name})
     session.commit()
     logger.debug(result)
@@ -116,7 +116,7 @@ def saveStatus(domain_name, ssl, status_code):
 """
 def saveInfo(url, title, description, original_domain):
     result = session.execute(
-        "INSERT INTO pubsecdomains.website_register (url, htmlhead_title, htmlmeta_description, original_domain) VALUES (:url, :htmlhead_title, :htmlmeta_description, :original_domain) " \
+        "INSERT INTO pubsecweb.website_register (url, htmlhead_title, htmlmeta_description, original_domain) VALUES (:url, :htmlhead_title, :htmlmeta_description, :original_domain) " \
         "ON CONFLICT (url)" 
         "DO UPDATE SET htmlhead_title = :htmlhead_title, htmlmeta_description = :htmlmeta_description, last_updated=NOW();",
         {"url":url, "htmlhead_title":title, "htmlmeta_description":description, "original_domain":original_domain})
@@ -364,14 +364,14 @@ Base = declarative_base()
 metadata = MetaData()
 
 # reflect db schema to MetaData
-metadata.reflect(bind=engine, schema='pubsecdomains')
+metadata.reflect(bind=engine, schema='pubsecweb')
 metadata.reflect(bind=engine, schema='a11ymon')
 
 #AxeRules = metadata.tables['a11ymon.axe_rules']
 test_header = metadata.tables['a11ymon.testresult_axe_header']
 test_data = metadata.tables['a11ymon.testresult_axe_data']
-domain_register = metadata.tables['pubsecdomains.domain_register']
-website_register = metadata.tables['pubsecdomains.website_register']
+domain_register = metadata.tables['pubsecweb.domain_register']
+website_register = metadata.tables['pubsecweb.website_register']
 
 # need to override the reflected definition of these as it fails to recognise the auto-increment :(
 test_header = Table('testresult_axe_header', metadata,
@@ -400,7 +400,7 @@ domain_register = Table('domain_register', metadata,
     Column('http_status_code', String),
     Column('http_status_code',String),
     Column('data_source',String),
-    schema='pubsecdomains',
+    schema='pubsecweb',
     extend_existing=True
 )
 
@@ -409,7 +409,7 @@ website_register = Table('website_register', metadata,
     Column('url', String),
     Column('htmlhead_title', String),
     Column('htmlmeta_description',String),
-    schema='pubsecdomains',
+    schema='pubsecweb',
     extend_existing=True
 )
 
