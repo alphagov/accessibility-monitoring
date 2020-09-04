@@ -6,4 +6,4 @@ applications:
     no-route: True
     health-check-type: process
     services:
-      - a11ymon-data
+      - a11ymon-postgres
