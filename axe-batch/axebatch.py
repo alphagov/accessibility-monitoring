@@ -24,6 +24,7 @@ logger.addHandler(ch)
 
 totalTests = 0
 successfulTests = 0
+skippedTests = 0
 failedTests = 0
 tic=0
 toc=0
@@ -213,13 +214,17 @@ def fetchSiteInfo(url):
     htmlhead_title = ""
     htmlmeta_description = ""
 
+    # we can't rely on the target having correctly configured SSL (a surprising number aren't),
+    # so we have an option to disable verification - set this to False
+    # Normally this would be unwise, but we're only fetching 2 specific html elements
+    verify_ssl = True
+
     try:
         # fudge the headers. Some sites reject the request if they don't recognise the user agent
         headers = {
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.125 Safari/537.36'}
-        # we can't rely on the target having correctly configured SSL, so we'll disable verification.
-        # Normally this would be unwise, but we're only fetching 2 specific html elements
-        r = requests.get(url, allow_redirects=True, verify=False, timeout=timeout, headers=headers)
+
+        r = requests.get(url, allow_redirects=True, verify=verify_ssl, timeout=timeout, headers=headers)
 
 
 
@@ -256,7 +261,7 @@ doTheLoop - cycle through all sites to test
 *******************************************
 """
 def doTheLoop():
-    global totalTests, tic, toc, successfulTests, failedTests
+    global totalTests, tic, toc, successfulTests, failedTests, skippedTests
     global domain_under_test
 
     logger.info("Selecting data...")
@@ -296,10 +301,12 @@ def doTheLoop():
                 fetchSiteInfo(url_to_test)
                 doAxeTest(url_to_test)
             else:
+                skippedTests +=1
                 logger.debug("dead site")
 
             print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
             print("Successful tests: ", successfulTests)
+            print("Skipped tests: ", skippedTests)
             print("Failed tests: ", failedTests)
             print("****************************")
             print()
