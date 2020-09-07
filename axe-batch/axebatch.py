@@ -109,7 +109,6 @@ def saveStatus(domain_name, ssl, status_code):
             "UPDATE pubsecweb.domain_register SET http_status_code=:status_code, last_updated=NOW() WHERE domain_name=:domain_name",
             {"status_code": status_code, "domain_name": domain_name})
     session.commit()
-    logger.debug(result)
 
 """
     saveInfo - record url and title + description in website register
@@ -125,15 +124,10 @@ def saveInfo(url, title, description, original_domain):
 """
     doAxeTest - run axe on the domain, parse the results, save 'em
 """
-def doAxeTest(site, addSomeDubs):
+def doAxeTest(site):
     global successfulTests, failedTests, domain_under_test
     axeResult = 0
     resultsDict = {"error":{"message": "Axe returned no result"}}
-    logger.debug("doAxeTest " + site)
-
-    if addSomeDubs:
-        # retrying the site with www. prepended
-        site = "www." + site
 
     axeResult = axeRunner(site)
 
@@ -169,127 +163,91 @@ def doAxeTest(site, addSomeDubs):
 def checkSiteExists(site, ssl):
     global domain_under_test, destination_url
     global successfulTests, failedTests
-    http_response_valid = 0
-    htmlhead_title = ""
-    htmlmeta_description = ""
     r = {}
     timeout = 30
 
-    # the 'server' variable is the domain portion of 'site' without anything after a /
-    pos = site.find('/')
-    if pos > 0:
-        server = site[0:pos - 1]
-    else:
-        server = site
-
-    #logger.info("checkSiteExists(" + site + ", " + ("SSL=True)" if ssl else "SSL=False)"))
+    logger.info("checkSiteExists(" + site + ", " + ("SSL=True)" if ssl else "SSL=False)"))
 
 
-    # first we'll see if it responds and check its http header
+    # see if it responds and check its http header
     try:
         # fudge the headers. Some sites reject the request if they don't recognise the user agent
         headers = {'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.125 Safari/537.36'}
         if ssl:
-            # we can't rely on the target having correctly configured SSL, so we'll disable verification.
-            # Normally this would be unwise, but we're only fetching the response status and 2 specific html elements
-            urllib3.disable_warnings()
-            r = requests.get("https://" + site, allow_redirects=False, verify=False, timeout=timeout, headers=headers)
+            r = requests.head("https://" + site, allow_redirects=False, timeout=timeout, headers=headers)
         else:
-            r = requests.get("http://" + site, allow_redirects=False, timeout=timeout, headers=headers)
-
-        logger.debug(r.status_code)
-        logger.debug(r.headers)
+            r = requests.head("http://" + site, allow_redirects=False, timeout=timeout, headers=headers)
 
     except requests.exceptions.RequestException as e:
-        logger.info(site + " failed to connect: ConnectionError=")
+        logger.info(site + " failed to fetch header: ConnectionError=")
         logger.info(e)
         # try it with dubs on it
         if site[0:4] != 'www.':
-            checkSiteExists('www.' + site, ssl)
+            return checkSiteExists('www.' + site, ssl)
+        else:
+            return ""
 
     if r:
-        # save the status_code before we do any redirecting shenanigans
-        # We can sometimes get a different status from domain.com and www.domain.com, so only record the former
-        if site[0:4] != 'www.':
-            saveStatus(domain_under_test, ssl, r.status_code)
+        # save the status_code in domains table (uses raw domain (site.gov.uk) rather than full URL)
+        saveStatus(domain_under_test, ssl, r.status_code)
 
-        if r.status_code > 300 and r.status_code < 400:
-            ## handle redirect
-            redirect_url = r.headers['location']
-            if redirect_url == site or redirect_url == 'https://' + site or redirect_url == 'http://' + site:
-                # don't infinitely recurse! Dis site ar brokened!
-                return ""
-            # if the redirect URL is the domain name WITHOUT the www (and we're trying with) then it'll recurse infinitely
-            # (because we always try adding 'www.' if a server times out). Best not do that. (sirthomasabney.hackney.sch.uk is an example of this)
-            redirect_sans_scheme = redirect_url
-            pos = redirect_url.find('://')
-            if pos > -1: redirect_sans_scheme = redirect_url[pos+3:]
-            if site[0:4] == 'www.' and (redirect_sans_scheme == site[4:] or redirect_sans_scheme == site[4:] + '/'):
-                # don't infinitely recurse! Dis site ar brokened!
-                logger.info("URL redirects to already tested URL (sans-www)")
-                return ""
-
-            # check if it's just a directory - starts with / or /.
-            if redirect_url[0] == '/':
-                ###### append the location to the server (not the whole URL!)
-                # just make sure that there's not a / on the end of the site already...
-                redirect_url = server + redirect_url
-                logger.debug("A redirecting to " + redirect_url)
-                checkSiteExists(redirect_url, ssl)
-            elif  redirect_url[0] == '.':
-                redirect_url = server + redirect_url[1:]
-                logger.debug("B redirecting to " + redirect_url)
-                checkSiteExists(redirect_url, ssl)
-            else:
-                # if it's the same url but as https:// then we don't need to record anything new - it's the same domain/folder.
-                if redirect_url == "https://" + site or redirect_url == "https://" + site + "/":
-                    # same url but https
-                    redirect_url = redirect_url[8:]
-                    logger.debug("C redirecting to " + redirect_url)
-                    checkSiteExists(redirect_url,True)
-                else:
-                    # check the new site that we've been redirected to
-                    if "https://" in redirect_url:
-                        redirect_url = redirect_url[8:]
-                        logger.debug("D redirecting to " + redirect_url)
-                        checkSiteExists(redirect_url,True)
-                    else:
-                        redirect_url = redirect_url[7:]
-                        logger.debug("E redirecting to " + redirect_url)
-                        checkSiteExists(redirect_url, False)
-
-        elif r.status_code < 300:
-            http_response_valid = True
+        url = r.url
+        if r.status_code <400:
+            # it's either good to go or a redirect.
+            logger.debug("returning " + url)
+            return url
 
         else:
             # >400. Do nothing as the status code will already have been recorded. There's nothing more to do.
             logger.info("website fail")
             logger.info(r.headers)
-
-
-
-    if http_response_valid:
-        # see if we can get some info. NB use ([\s\S]*?) instead of (?s)(.*) as the latter is greedy and matches the entire page
-        # title
-        htmlheadTitleDict = re.findall('<title>([\s\S]*?)</title>', r.text)
-        if len(htmlheadTitleDict)>0:
-            htmlhead_title = htmlheadTitleDict[0].strip()
-        # description
-        htmlmetaDescriptionDict = re.findall('<meta name="description" content="([\s\S]*?)"', r.text)
-        if len(htmlmetaDescriptionDict)>0:
-            htmlmeta_description = htmlmetaDescriptionDict[0].strip()
-
-        # save the stuff. But strip off default port numbers from URLs first.
-        destination_url = re.sub(":80", "", r.url)
-        destination_url = re.sub(":443", "", r.url)
-
-        saveInfo(destination_url, htmlhead_title, htmlmeta_description, domain_under_test)
-        logger.info("Resolved destination = " + destination_url)
-
-        return destination_url
+            return ""
     else:
         return ""
 
+"""
+    fetchSiteInfo - retrieve title and description from html
+"""
+def fetchSiteInfo(url):
+    timeout = 30
+    htmlhead_title = ""
+    htmlmeta_description = ""
+
+    try:
+        # fudge the headers. Some sites reject the request if they don't recognise the user agent
+        headers = {
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.125 Safari/537.36'}
+        # we can't rely on the target having correctly configured SSL, so we'll disable verification.
+        # Normally this would be unwise, but we're only fetching 2 specific html elements
+        r = requests.get(url, allow_redirects=True, verify=False, timeout=timeout, headers=headers)
+
+
+
+        if r.status_code<300:
+            # see if we can get some info. NB use ([\s\S]*?) instead of (?s)(.*) as the latter is greedy and matches the entire page
+            # title
+            htmlheadTitleDict = re.findall('<title>([\s\S]*?)</title>', r.text)
+            if len(htmlheadTitleDict)>0:
+                htmlhead_title = htmlheadTitleDict[0].strip()
+            # description
+            htmlmetaDescriptionDict = re.findall('<meta name="description" content="([\s\S]*?)"', r.text)
+            if len(htmlmetaDescriptionDict)>0:
+                htmlmeta_description = htmlmetaDescriptionDict[0].strip()
+
+            # save the stuff. But strip off default port numbers from URLs first.
+            destination_url = re.sub(":80", "", r.url)
+            destination_url = re.sub(":443", "", r.url)
+
+            saveInfo(destination_url, htmlhead_title, htmlmeta_description, domain_under_test)
+            logger.info("Resolved destination = " + destination_url)
+
+            return True
+        else:
+            return False
+
+    except requests.exceptions.RequestException as e:
+        logger.info(url + " failed to fetch page: ConnectionError=")
+        logger.info(e)
 
 
 """
@@ -311,6 +269,7 @@ def doTheLoop():
     for row in rows:
         print("Testing " + row.domain_name)
         domain_under_test = row.domain_name
+        destination_url = ""
 
         # check to see when we last tested this url
         oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
@@ -324,14 +283,21 @@ def doTheLoop():
             print("****************************")
             print("Test number " , totalTests, " of ", totalRows, ": ", row.domain_name)
             print("****************************")
-            # try SSL first. If that doesn't resolve to a final URL, try without
-            checkSiteExists(row.domain_name, True)
-            if destination_url == "":
-                checkSiteExists(row.domain_name, False)
-            # if that came back with a resolved URL (ie it's a real site), do an Axe test
-            if destination_url != "":
-                logger.debug("sending to axetest with [" + destination_url + "]")
-                doAxeTest(destination_url, False)
+
+            surl = checkSiteExists(row.domain_name, True)
+
+            nurl = checkSiteExists(row.domain_name, False)
+
+            # favour SSl
+            url_to_test = surl if surl != "" else nurl
+
+            if url_to_test != "":
+                logger.debug("go test " + url_to_test)
+                fetchSiteInfo(url_to_test)
+                doAxeTest(url_to_test)
+            else:
+                logger.debug("dead site")
+
             print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
             print("Successful tests: ", successfulTests)
             print("Failed tests: ", failedTests)
@@ -435,16 +401,25 @@ def main(argv):
           sys.exit()
      elif opt in ("-d", "--singleDomain"):
          singleDomain = arg
-         print ('single url to test is ', singleDomain)
+         logger.info ('single url to test is ' + singleDomain)
 
     if singleDomain:
        domain_under_test = singleDomain
-       checkSiteExists(singleDomain, True)
-       if destination_url == "":
-           checkSiteExists(singleDomain, False)
-       if destination_url != "":
-           logger.debug("sending to axetest with [" + destination_url + "]")
-           doAxeTest(destination_url, False)
+
+       surl = checkSiteExists(singleDomain, True)
+       logger.debug("surl=" + surl)
+
+       nurl = checkSiteExists(singleDomain, False)
+       logger.debug("nurl=" + nurl)
+
+       url_to_test = surl if surl!="" else nurl
+
+       if url_to_test != "":
+           logger.debug("go test " + url_to_test)
+           fetchSiteInfo(url_to_test)
+           doAxeTest(url_to_test)
+       else:
+           logger.debug("dead site")
 
     else:
        doTheLoop()
