@@ -101,6 +101,8 @@ def saveResult(domain_name, resultsDict):
     saveStatus - record http(s) status in domain_register table (only temporary while we use domain_register)
 """
 def saveStatus(domain_name, ssl, status_code):
+    logger.debug("save status: ")
+    logger.debug(status_code)
     if ssl:
         result = session.execute(
             "UPDATE pubsecweb.domain_register SET https_status_code=:status_code, last_updated=NOW() WHERE domain_name=:domain_name",
@@ -165,7 +167,7 @@ def checkSiteExists(site, ssl):
     global domain_under_test, destination_url
     global successfulTests, failedTests
     r = {}
-    timeout = 30
+    timeout = 5
 
     logger.info("checkSiteExists(" + site + ", " + ("SSL=True)" if ssl else "SSL=False)"))
 
@@ -179,16 +181,24 @@ def checkSiteExists(site, ssl):
         else:
             r = requests.head("http://" + site, allow_redirects=False, timeout=timeout, headers=headers)
 
-    except requests.exceptions.RequestException as e:
-        logger.info(site + " failed to fetch header: ConnectionError=")
-        logger.info(e)
+        if r.status_code:
+            logger.debug(r.status_code)
+        else:
+            logger.debug("no result")
+    except Exception as ex:
+        template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+        message = template.format(type(ex).__name__, ex.args)
+        logger.info(message)
+        # save NOH (=no header) in domains table (uses raw domain (site.gov.uk) rather than full URL)
+
+        saveStatus(domain_under_test, ssl, 'NOH')
         # try it with dubs on it
         if site[0:4] != 'www.':
             return checkSiteExists('www.' + site, ssl)
         else:
             return ""
 
-    if r:
+    if r.status_code:
         # save the status_code in domains table (uses raw domain (site.gov.uk) rather than full URL)
         saveStatus(domain_under_test, ssl, r.status_code)
 
@@ -204,6 +214,9 @@ def checkSiteExists(site, ssl):
             logger.info(r.headers)
             return ""
     else:
+        # save NOH (=no header) in domains table (uses raw domain (site.gov.uk) rather than full URL)
+        logger.debug("no result")
+        saveStatus(domain_under_test, ssl, 'NOH')
         return ""
 
 """
@@ -266,9 +279,8 @@ def doTheLoop():
 
     logger.info("Selecting data...")
     # pick a url at random
-    # in the long term, the urls to test will be picked from a specific list, but for now we're testing ALL THE THINGS
-    ###query = session.query(domain_register).filter(or_(domain_register.c.http_status_code=='200', domain_register.c.https_status_code=='200')).order_by(func.random())
-    query = session.query(domain_register).order_by(func.random())
+    # in the long term, the urls to test will be picked from a specific list, but for now we're testing ALL THE THINGS (but only once, hence the filter)
+    query = session.query(website_register).filter(website_register.c.last_updated<'2020-09-22 00:00:00').order_by(func.random())
     rows=query.all()
     totalRows=query.count()
     for row in rows:
@@ -278,8 +290,9 @@ def doTheLoop():
 
         # check to see when we last tested this url
         oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
-        #oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=1) # <-- temporary while we populate the website_register table with contents of domain_register
+
         testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.domain_name==row.domain_name)).count()
+        testedRows=0
         if testedRows==0:
             # we've not done this one within the last year so carry on
             tic = time.perf_counter()
@@ -299,15 +312,14 @@ def doTheLoop():
             if url_to_test != "":
                 logger.debug("go test " + url_to_test)
                 fetchSiteInfo(url_to_test)
-                doAxeTest(url_to_test)
+                #doAxeTest(url_to_test) -- todo: re-enable this
             else:
                 skippedTests +=1
                 logger.debug("dead site")
 
+            toc = time.perf_counter()
             print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
-            print("Successful tests: ", successfulTests)
-            print("Skipped tests: ", skippedTests)
-            print("Failed tests: ", failedTests)
+            print("Successful/skipped/failed tests: ", successfulTests, "/", skippedTests, "/", failedTests)
             print("****************************")
             print()
         else:
