@@ -128,7 +128,7 @@ def saveInfo(url, title, description, original_domain):
     doAxeTest - run axe on the domain, parse the results, save 'em
 """
 def doAxeTest(site):
-    global successfulTests, failedTests, domain_under_test
+    global successfulTests, failedTests, url_under_test
     axeResult = 0
     resultsDict = {"error":{"message": "Axe returned no result"}}
 
@@ -140,7 +140,7 @@ def doAxeTest(site):
             logger.info(resultsDict["error"]["message"])
             failedTests+=1
             toc = time.perf_counter()
-            saveResult(domain_under_test, resultsDict)
+            saveResult(url_under_test, resultsDict)
             return(0)
         else:
             # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
@@ -149,22 +149,22 @@ def doAxeTest(site):
                 toc = time.perf_counter()
                 saveResult(site, resultsDict)
                 return(0)
-            saveResult(domain_under_test, resultsDict)
+            saveResult(url_under_test, resultsDict)
             successfulTests+=1
 
     else:
         logger.info("No result returned")
-        # we've already tried it with and without www so give up.
+        # so give up.
         failedTests+=1
         toc = time.perf_counter()
-        saveResult(domain_under_test, resultsDict)
+        saveResult(url_under_test, resultsDict)
 
 
 """
     checkSiteExists - check the http response of the site; follow redirect(s recursively)
 """
 def checkSiteExists(site, ssl):
-    global domain_under_test, destination_url
+    global url_under_test, destination_url
     global successfulTests, failedTests
     r = {}
     timeout = 5
@@ -191,16 +191,12 @@ def checkSiteExists(site, ssl):
         logger.info(message)
         # save NOH (=no header) in domains table (uses raw domain (site.gov.uk) rather than full URL)
 
-        saveStatus(domain_under_test, ssl, 'NOH')
-        # try it with dubs on it
-        if site[0:4] != 'www.':
-            return checkSiteExists('www.' + site, ssl)
-        else:
-            return ""
+        saveStatus(url_under_test, ssl, 'NOH')
+        return ""
 
     if r.status_code:
         # save the status_code in domains table (uses raw domain (site.gov.uk) rather than full URL)
-        saveStatus(domain_under_test, ssl, r.status_code)
+        saveStatus(url_under_test, ssl, r.status_code)
 
         url = r.url
         if r.status_code <400:
@@ -216,7 +212,7 @@ def checkSiteExists(site, ssl):
     else:
         # save NOH (=no header) in domains table (uses raw domain (site.gov.uk) rather than full URL)
         logger.debug("no result")
-        saveStatus(domain_under_test, ssl, 'NOH')
+        saveStatus(url_under_test, ssl, 'NOH')
         return ""
 
 """
@@ -256,7 +252,7 @@ def fetchSiteInfo(url):
             destination_url = re.sub(":80", "", r.url)
             destination_url = re.sub(":443", "", r.url)
 
-            saveInfo(destination_url, htmlhead_title, htmlmeta_description, domain_under_test)
+            saveInfo(destination_url, htmlhead_title, htmlmeta_description, url_under_test)
             logger.info("Resolved destination = " + destination_url)
 
             return True
@@ -275,23 +271,24 @@ doTheLoop - cycle through all sites to test
 """
 def doTheLoop():
     global totalTests, tic, toc, successfulTests, failedTests, skippedTests
-    global domain_under_test
+    global url_under_test
 
     logger.info("Selecting data...")
     # pick a url at random
     # in the long term, the urls to test will be picked from a specific list, but for now we're testing ALL THE THINGS (but only once, hence the filter)
-    query = session.query(website_register).filter(website_register.c.last_updated<'2020-09-22 00:00:00').order_by(func.random())
+    query = session.query(website_register).filter(website_register.c.requires_authentication.isnot(True), website_register.c.holding_page.isnot(True)).order_by(func.random())
     rows=query.all()
     totalRows=query.count()
     for row in rows:
-        print("Testing " + row.domain_name)
-        domain_under_test = row.domain_name
+        print("Testing " + row.url)
+        url_under_test = row.url
         destination_url = ""
 
         # check to see when we last tested this url
         oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
 
-        testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.domain_name==row.domain_name)).count()
+        # yes, we could take the sites-to-test from a query that joined on the test results table in order to only select the sites that were due, but this script will run indefinitely so we'd need to re-query every day.
+        testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.url==row.url)).count()
         testedRows=0
         if testedRows==0:
             # we've not done this one within the last year so carry on
@@ -299,20 +296,22 @@ def doTheLoop():
             totalTests+=1
             print()
             print("****************************")
-            print("Test number " , totalTests, " of ", totalRows, ": ", row.domain_name)
+            print("Test number " , totalTests, " of ", totalRows, ": ", row.url)
             print("****************************")
 
-            surl = checkSiteExists(row.domain_name, True)
+            # don't need to check the site exists no w- that phase of work is complete. For now.
+            #surl = checkSiteExists(row.url, True)
+            #nurl = checkSiteExists(row.url, False)
 
-            nurl = checkSiteExists(row.domain_name, False)
+            # # favour SSl
+            # url_to_test = surl if surl != "" else nurl
 
-            # favour SSl
-            url_to_test = surl if surl != "" else nurl
+            url_to_test = row.url
 
             if url_to_test != "":
                 logger.debug("go test " + url_to_test)
                 fetchSiteInfo(url_to_test)
-                #doAxeTest(url_to_test) -- todo: re-enable this
+                doAxeTest(url_to_test)
             else:
                 skippedTests +=1
                 logger.debug("dead site")
@@ -340,7 +339,7 @@ script entry point
 # taken from local environment variable in the format postgresql+psycopg2://localuser:localuser@localhost/a11ymon
 CONNECTION_URI = os.getenv("DATABASE_URL")
 
-domain_under_test = ""
+url_under_test = ""
 
 print("Connecting to database...")
 engine = create_engine(CONNECTION_URI)
@@ -399,6 +398,8 @@ website_register = Table('website_register', metadata,
     Column('url', String),
     Column('htmlhead_title', String),
     Column('htmlmeta_description',String),
+    Column('requires_authentication',String),
+    Column('holding_page',String),
     schema='pubsecweb',
     extend_existing=True
 )
@@ -406,7 +407,7 @@ website_register = Table('website_register', metadata,
 
 
 def main(argv):
-    global domain_under_test
+    global url_under_test
     singleDomain = ''
 
     try:
@@ -423,7 +424,7 @@ def main(argv):
          logger.info ('single url to test is ' + singleDomain)
 
     if singleDomain:
-       domain_under_test = singleDomain
+       url_under_test = singleDomain
 
        surl = checkSiteExists(singleDomain, True)
        logger.debug("surl=" + surl)
