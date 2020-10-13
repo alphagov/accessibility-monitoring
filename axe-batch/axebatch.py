@@ -137,7 +137,7 @@ def doAxeTest(site):
     if axeResult:
         resultsDict = axeResult
         if "error" in resultsDict:
-            logger.info(resultsDict["error"]["message"])
+            logger.warning(resultsDict["error"]["message"])
             failedTests+=1
             toc = time.perf_counter()
             saveResult(url_under_test, resultsDict)
@@ -275,7 +275,7 @@ def doTheLoop():
 
     logger.info("Selecting data...")
     # pick a url at random
-    # in the long term, the urls to test will be picked from a specific list, but for now we're testing ALL THE THINGS (but only once, hence the filter)
+    # in the long term, the urls to test will be picked from a specific list, but for now we're testing ALL THE THINGS (but only once, hence the further query later)
     query = session.query(website_register).filter(website_register.c.requires_authentication.isnot(True), website_register.c.holding_page.isnot(True)).order_by(func.random())
     rows=query.all()
     totalRows=query.count()
@@ -285,11 +285,11 @@ def doTheLoop():
         destination_url = ""
 
         # check to see when we last tested this url
-        oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
-
         # yes, we could take the sites-to-test from a query that joined on the test results table in order to only select the sites that were due, but this script will run indefinitely so we'd need to re-query every day.
-        testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp>oneYearAgo, test_header.c.url==row.url)).count()
-        testedRows=0
+        oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
+        testedRows = session.query(test_header).filter(and_(test_header.c.test_timestamp<oneYearAgo, test_header.c.url==row.url)).count()
+
+        logger.debug(testedRows)
         if testedRows==0:
             # we've not done this one within the last year so carry on
             tic = time.perf_counter()
@@ -299,7 +299,7 @@ def doTheLoop():
             print("Test number " , totalTests, " of ", totalRows, ": ", row.url)
             print("****************************")
 
-            # don't need to check the site exists no w- that phase of work is complete. For now.
+            # don't need to check the site exists now - that phase of work is complete. For now.
             #surl = checkSiteExists(row.url, True)
             #nurl = checkSiteExists(row.url, False)
 
@@ -317,12 +317,15 @@ def doTheLoop():
                 logger.debug("dead site")
 
             toc = time.perf_counter()
-            print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
-            print("Successful/skipped/failed tests: ", successfulTests, "/", skippedTests, "/", failedTests)
-            print("****************************")
-            print()
         else:
-            print("Already tested.")
+            logger.info("Already tested.")
+            skippedTests += 1
+
+
+        print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
+        print("Successful/skipped/failed tests: ", successfulTests, "/", skippedTests, "/", failedTests)
+        print("****************************")
+        print()
 
     print(".")
     print("****************************")
