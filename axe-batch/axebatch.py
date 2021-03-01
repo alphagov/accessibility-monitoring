@@ -16,6 +16,8 @@ import logging
 logger = logging.getLogger()
 logger.setLevel(logging.WARNING)
 
+logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
+
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 ch = logging.StreamHandler()
@@ -53,7 +55,7 @@ def saveResult(domain_name, resultsDict):
     if "error" in resultsDict:
         result = session.execute(
             test_header.insert(),
-            {"test_timestamp": datetime.datetime.now(), "url": "", "domain_name": domain_name, "axe_version": "",
+            {"test_timestamp": datetime.datetime.now(), "url": domain_name, "domain_name": domain_name, "axe_version": "",
              "test_environment": "", "time_taken": toc - tic, "test_succeeded": False,
              "further_info": resultsDict["error"]["message"]})
 
@@ -164,7 +166,7 @@ def doAxeTest(site):
             return (0)
         else:
             # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
-            if resultsDict["url"] == "chrome-error://chromewebdata/":
+            if resultsDict["url"][0,11] == "chrome-error":
                 failedTests += 1
                 toc = time.perf_counter()
                 saveResult(site, resultsDict)
@@ -308,13 +310,15 @@ def doTheLoop():
     for row in rows:
         print("Testing " + row.url)
         url_under_test = row.url
+        domain_under_test = row.original_domain
         destination_url = ""
 
         # check to see when we last tested this url
         # yes, we could take the sites-to-test from a query that joined on the test results table in order to only select the sites that were due, but this script will run indefinitely so we'd need to re-query every day.
         oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
+        logger.debug(oneYearAgo)
         testedRows = session.query(test_header).filter(
-            and_(test_header.c.test_timestamp < oneYearAgo, test_header.c.url == row.url)).count()
+            and_(test_header.c.test_timestamp > oneYearAgo, test_header.c.url == row.url)).count()
 
         logger.debug(testedRows)
         if testedRows == 0:
@@ -344,11 +348,11 @@ def doTheLoop():
                 logger.debug("dead site")
 
             toc = time.perf_counter()
+            print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
         else:
             logger.info("Already tested.")
             skippedTests += 1
 
-        print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
         print("Successful/skipped/failed tests: ", successfulTests, "/", skippedTests, "/", failedTests)
         print("****************************")
         print()
@@ -427,6 +431,7 @@ website_register = Table('website_register', metadata,
                          Column('url', String),
                          Column('htmlhead_title', String),
                          Column('htmlmeta_description', String),
+                         Column('original_domain', String),
                          Column('requires_authentication', String),
                          Column('holding_page', String),
                          schema='pubsecweb',
