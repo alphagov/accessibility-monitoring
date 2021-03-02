@@ -1,0 +1,8 @@
+---
+applications:
+- name: cf-ex-phppgadmin
+  memory: 128M
+  buildpacks:
+  - php_buildpack
+  services:
+  - pgsql
