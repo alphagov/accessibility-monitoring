@@ -1,8 +1,8 @@
 ---
 applications:
-- name: cf-ex-phppgadmin
+- name: a11ymon-pgadmin
   memory: 128M
   buildpacks:
   - php_buildpack
   services:
-  - pgsql
+  - a11ymon-postgres
