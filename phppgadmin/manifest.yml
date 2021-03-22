@@ -1,0 +1,8 @@
+---
+applications:
+- name: a11ymon-pgadmin
+  memory: 128M
+  buildpacks:
+  - php_buildpack
+  services:
+  - a11ymon-postgres
