@@ -1,8 +1,0 @@
----
-applications:
-  - name: axepup
-    buildpacks:
-    - https://github.com/cloudfoundry/apt-buildpack.git#v0.2.2
-    - nodejs_buildpack
-    no-route: True
-    health-check-type: process
