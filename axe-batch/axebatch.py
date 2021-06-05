@@ -1,17 +1,19 @@
-import os, json, datetime, time, sys, getopt, ssl
+import datetime
+import getopt
+import json
+import logging
+import os
 import re
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData, Table, and_, or_
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.types import DateTime
-from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import JSON
+import sys
+import time
 
 import requests
-import urllib3
-from urllib.parse import urlparse
-
-import logging
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData, Table, and_
+from sqlalchemy.dialects.postgresql import JSON
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql import func
+from sqlalchemy.types import DateTime
 
 logger = logging.getLogger()
 logger.setLevel(logging.WARNING)
@@ -21,7 +23,7 @@ logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
+ch.setLevel(logging.WARNING)
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
@@ -34,30 +36,31 @@ toc = 0
 destination_url = ""
 
 
-def axeRunner(dom2test):
-    axerunnerResult = requests.get('https://axerunner.london.cloudapps.digital', params={'targetURL': dom2test})
-    if axerunnerResult.status_code == 200:
-        return axerunnerResult.json()
+def axe_runner(dom2test):
+    axerunner_result = requests.get('https://axerunner.london.cloudapps.digital', params={'targetURL': dom2test})
+    if axerunner_result.status_code == 200:
+        return axerunner_result.json()
     else:
-        errorDict = axerunnerResult.json()
-        return errorDict
+        error_dict = axerunner_result.json()
+        return error_dict
 
 
-def parseResult(jsonIn):
+def parse_result(json_in):
     # parse into python dict:
-    resultsDict = json.loads(jsonIn)
-    return resultsDict
+    results_dict = json.loads(json_in)
+    return results_dict
 
 
-def saveResult(domain_name, resultsDict):
+def save_result(domain_name, results_dict):
     global toc
     toc = time.perf_counter()
-    if "error" in resultsDict:
+    if "error" in results_dict:
         result = session.execute(
             test_header.insert(),
-            {"test_timestamp": datetime.datetime.now(), "url": domain_name, "domain_name": domain_name, "axe_version": "",
+            {"test_timestamp": datetime.datetime.now(), "url": domain_name, "domain_name": domain_name,
+             "axe_version": "",
              "test_environment": "", "time_taken": toc - tic, "test_succeeded": False,
-             "further_info": resultsDict["error"]["message"]})
+             "further_info": results_dict["error"]["message"]})
 
         test_id = result.inserted_primary_key[0]
         session.commit()
@@ -66,8 +69,8 @@ def saveResult(domain_name, resultsDict):
 
         result = session.execute(
             test_header.insert(),
-            {"test_timestamp": resultsDict["timestamp"], "url": resultsDict["url"], "domain_name": domain_name,
-             "axe_version": resultsDict["testEngine"]["version"], "test_environment": resultsDict["testEnvironment"],
+            {"test_timestamp": results_dict["timestamp"], "url": results_dict["url"], "domain_name": domain_name,
+             "axe_version": results_dict["testEngine"]["version"], "test_environment": results_dict["testEnvironment"],
              "time_taken": toc - tic, "test_succeeded": True})
 
         test_id = result.inserted_primary_key[0]
@@ -76,7 +79,7 @@ def saveResult(domain_name, resultsDict):
         # record data. We're doing this the long way as we want the results to say "pass" not "passes" and "violation" not "violations" etc and it's just less faff TBH
         # record violations
         count = 0
-        for testItem in resultsDict["violations"]:
+        for testItem in results_dict["violations"]:
             count += 1
             result = session.execute(
                 test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "violation",
@@ -85,7 +88,7 @@ def saveResult(domain_name, resultsDict):
 
         # record passes
         count = 0
-        for testItem in resultsDict["passes"]:
+        for testItem in results_dict["passes"]:
             count += 1
             result = session.execute(
                 test_data.insert(),
@@ -94,7 +97,7 @@ def saveResult(domain_name, resultsDict):
 
         # record inapplicable
         count = 0
-        for testItem in resultsDict["inapplicable"]:
+        for testItem in results_dict["inapplicable"]:
             count += 1
             result = session.execute(
                 test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "inapplicable",
@@ -103,7 +106,7 @@ def saveResult(domain_name, resultsDict):
 
         # record incomplete
         count = 0
-        for testItem in resultsDict["incomplete"]:
+        for testItem in results_dict["incomplete"]:
             count += 1
             result = session.execute(
                 test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "incomplete",
@@ -116,7 +119,7 @@ def saveResult(domain_name, resultsDict):
 """
 
 
-def saveStatus(domain_name, ssl, status_code):
+def save_status(domain_name, ssl, status_code):
     logger.debug("save status: ")
     logger.debug(status_code)
     if ssl:
@@ -135,9 +138,9 @@ def saveStatus(domain_name, ssl, status_code):
 """
 
 
-def saveInfo(url, title, description, original_domain):
+def save_info(url, title, description, original_domain):
     result = session.execute(
-        "INSERT INTO pubsecweb.website_register (url, htmlhead_title, htmlmeta_description, original_domain) VALUES (:url, :htmlhead_title, :htmlmeta_description, :original_domain) " \
+        "INSERT INTO pubsecweb.website_register (url, htmlhead_title, htmlmeta_description, original_domain) VALUES (:url, :htmlhead_title, :htmlmeta_description, :original_domain) "
         "ON CONFLICT (url)"
         "DO UPDATE SET htmlhead_title = :htmlhead_title, htmlmeta_description = :htmlmeta_description, last_updated=NOW();",
         {"url": url, "htmlhead_title": title, "htmlmeta_description": description, "original_domain": original_domain})
@@ -149,29 +152,30 @@ def saveInfo(url, title, description, original_domain):
 """
 
 
-def doAxeTest(site):
-    global successfulTests, failedTests, url_under_test
-    axeResult = 0
-    resultsDict = {"error": {"message": "Axe returned no result"}}
+def do_axe_test(site):
+    global successfulTests, failedTests, url_under_test, toc
+    axe_result = 0
+    results_dict = {"error": {"message": "Axe returned no result"}}
 
-    axeResult = axeRunner(site)
+    axe_result = axe_runner(site)
 
-    if axeResult:
-        resultsDict = axeResult
-        if "error" in resultsDict:
-            logger.warning(resultsDict["error"]["message"])
+    if axe_result:
+        results_dict = axe_result
+        if "error" in results_dict:
+            logger.warning(results_dict["error"]["message"])
             failedTests += 1
             toc = time.perf_counter()
-            saveResult(url_under_test, resultsDict)
+            save_result(url_under_test, results_dict)
             return (0)
         else:
             # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
-            if resultsDict["url"][0,11] == "chrome-error":
+            url: str = results_dict["url"]
+            if url[0:11] == "chrome-error":
                 failedTests += 1
                 toc = time.perf_counter()
-                saveResult(site, resultsDict)
+                save_result(site, results_dict)
                 return (0)
-            saveResult(url_under_test, resultsDict)
+            save_result(url_under_test, results_dict)
             successfulTests += 1
 
     else:
@@ -179,15 +183,15 @@ def doAxeTest(site):
         # so give up.
         failedTests += 1
         toc = time.perf_counter()
-        saveResult(url_under_test, resultsDict)
+        save_result(url_under_test, results_dict)
 
 
 """
-    checkSiteExists - check the http response of the site; follow redirect(s recursively)
+    check_site_exists - check the http response of the site; follow redirect(s recursively)
 """
 
 
-def checkSiteExists(site, ssl):
+def check_site_exists(site, ssl):
     global url_under_test, destination_url
     global successfulTests, failedTests
     r = {}
@@ -215,12 +219,12 @@ def checkSiteExists(site, ssl):
         logger.info(message)
         # save NOH (=no header) in domains table (uses raw domain (site.gov.uk) rather than full URL)
 
-        saveStatus(url_under_test, ssl, 'NOH')
+        save_status(url_under_test, ssl, 'NOH')
         return ""
 
     if r.status_code:
         # save the status_code in domains table (uses raw domain (site.gov.uk) rather than full URL)
-        saveStatus(url_under_test, ssl, r.status_code)
+        save_status(url_under_test, ssl, r.status_code)
 
         url = r.url
         if r.status_code < 400:
@@ -236,7 +240,7 @@ def checkSiteExists(site, ssl):
     else:
         # save NOH (=no header) in domains table (uses raw domain (site.gov.uk) rather than full URL)
         logger.debug("no result")
-        saveStatus(url_under_test, ssl, 'NOH')
+        save_status(url_under_test, ssl, 'NOH')
         return ""
 
 
@@ -245,7 +249,7 @@ def checkSiteExists(site, ssl):
 """
 
 
-def fetchSiteInfo(url):
+def fetch_site_info(url):
     timeout = 30
     htmlhead_title = ""
     htmlmeta_description = ""
@@ -265,19 +269,19 @@ def fetchSiteInfo(url):
         if r.status_code < 300:
             # see if we can get some info. NB use ([\s\S]*?) instead of (?s)(.*) as the latter is greedy and matches the entire page
             # title
-            htmlheadTitleDict = re.findall('<title>([\s\S]*?)</title>', r.text)
-            if len(htmlheadTitleDict) > 0:
-                htmlhead_title = htmlheadTitleDict[0].strip()
+            htmlhead_title_dict = re.findall('<title>([\s\S]*?)</title>', r.text)
+            if len(htmlhead_title_dict) > 0:
+                htmlhead_title = htmlhead_title_dict[0].strip()
             # description
-            htmlmetaDescriptionDict = re.findall('<meta name="description" content="([\s\S]*?)"', r.text)
-            if len(htmlmetaDescriptionDict) > 0:
-                htmlmeta_description = htmlmetaDescriptionDict[0].strip()
+            htmlmeta_description_dict = re.findall('<meta name="description" content="([\s\S]*?)"', r.text)
+            if len(htmlmeta_description_dict) > 0:
+                htmlmeta_description = htmlmeta_description_dict[0].strip()
 
             # save the stuff. But strip off default port numbers from URLs first.
             destination_url = re.sub(":80", "", r.url)
             destination_url = re.sub(":443", "", r.url)
 
-            saveInfo(destination_url, htmlhead_title, htmlmeta_description, url_under_test)
+            save_info(destination_url, htmlhead_title, htmlmeta_description, url_under_test)
             logger.info("Resolved destination = " + destination_url)
 
             return True
@@ -296,7 +300,7 @@ doTheLoop - cycle through all sites to test
 """
 
 
-def doTheLoop():
+def do_the_loop():
     global totalTests, tic, toc, successfulTests, failedTests, skippedTests
     global url_under_test
 
@@ -306,7 +310,7 @@ def doTheLoop():
     query = session.query(website_register).filter(website_register.c.requires_authentication.isnot(True),
                                                    website_register.c.holding_page.isnot(True)).order_by(func.random())
     rows = query.all()
-    totalRows = query.count()
+    total_rows = query.count()
     for row in rows:
         print("Testing " + row.url)
         url_under_test = row.url
@@ -315,19 +319,19 @@ def doTheLoop():
 
         # check to see when we last tested this url
         # yes, we could take the sites-to-test from a query that joined on the test results table in order to only select the sites that were due, but this script will run indefinitely so we'd need to re-query every day.
-        oneYearAgo = datetime.datetime.now() - datetime.timedelta(days=365)
-        logger.debug(oneYearAgo)
-        testedRows = session.query(test_header).filter(
-            and_(test_header.c.test_timestamp > oneYearAgo, test_header.c.url == row.url)).count()
+        one_year_ago = datetime.datetime.now() - datetime.timedelta(days=365)
+        logger.debug(one_year_ago)
+        tested_rows = session.query(test_header).filter(
+            and_(test_header.c.test_timestamp > one_year_ago, test_header.c.url == row.url)).count()
 
-        logger.debug(testedRows)
-        if testedRows == 0:
+        logger.debug(tested_rows)
+        if tested_rows == 0:
             # we've not done this one within the last year so carry on
             tic = time.perf_counter()
             totalTests += 1
             print()
             print("****************************")
-            print("Test number ", totalTests, " of ", totalRows, ": ", row.url)
+            print("Test number ", totalTests, " of ", total_rows, ": ", row.url)
             print("****************************")
 
             # don't need to check the site exists now - that phase of work is complete. For now.
@@ -341,8 +345,8 @@ def doTheLoop():
 
             if url_to_test != "":
                 logger.debug("go test " + url_to_test)
-                fetchSiteInfo(url_to_test)
-                doAxeTest(url_to_test)
+                fetch_site_info(url_to_test)
+                do_axe_test(url_to_test)
             else:
                 skippedTests += 1
                 logger.debug("dead site")
@@ -392,6 +396,7 @@ metadata.reflect(bind=engine, schema='a11ymon')
 # AxeRules = metadata.tables['a11ymon.axe_rules']
 test_header = metadata.tables['a11ymon.testresult_axe_header']
 test_data = metadata.tables['a11ymon.testresult_axe_data']
+axe_rule = metadata.tables['a11ymon.axe_rule']
 domain_register = metadata.tables['pubsecweb.domain_register']
 website_register = metadata.tables['pubsecweb.website_register']
 
@@ -438,44 +443,59 @@ website_register = Table('website_register', metadata,
                          extend_existing=True
                          )
 
+axe_rule = Table('axe_rule', metadata,
+                 Column('rule_id', Integer, primary_key=True, autoincrement=True),
+                 Column('description', String),
+                 Column('impact', String),
+                 Column('selector', String),
+                 Column('tags', String),
+                 Column('help', String),
+                 schema='pubsecweb',
+                 extend_existing=True
+                 )
+
 
 def main(argv):
     global url_under_test
-    singleDomain = ''
+    single_domain = ''
 
     try:
-        opts, args = getopt.getopt(argv, "hd:", ["singleDomain="])
+        opts, args = getopt.getopt(argv, "hd:", ["single_domain="])
     except getopt.GetoptError:
-        print('axerunner.py -d <domain_name>')
+        print('axebatch.py -d <domain_name>')
         sys.exit(2)
     for opt, arg in opts:
         if opt == '-h':
-            print('axerunner.py -d <domain_name>')
+            print('axebatch.py -d <domain_name>')
             sys.exit()
-        elif opt in ("-d", "--singleDomain"):
-            singleDomain = arg
-            logger.info('single url to test is ' + singleDomain)
+        elif opt in ("-d", "--single_domain"):
+            single_domain = arg
+            logger.info('single url to test is ' + single_domain)
 
-    if singleDomain:
-        url_under_test = singleDomain
+    # load axe_rules table into an array
 
-        surl = checkSiteExists(singleDomain, True)
+    if single_domain:
+        url_under_test = single_domain
+
+        # non-ssl
+        surl = check_site_exists(single_domain, True)
         logger.debug("surl=" + surl)
 
-        nurl = checkSiteExists(singleDomain, False)
+        # ssl
+        nurl = check_site_exists(single_domain, False)
         logger.debug("nurl=" + nurl)
 
         url_to_test = surl if surl != "" else nurl
 
         if url_to_test != "":
             logger.debug("go test " + url_to_test)
-            fetchSiteInfo(url_to_test)
-            doAxeTest(url_to_test)
+            fetch_site_info(url_to_test)
+            do_axe_test(url_to_test)
         else:
             logger.debug("dead site")
 
     else:
-        doTheLoop()
+        do_the_loop()
 
 
 if __name__ == "__main__":
