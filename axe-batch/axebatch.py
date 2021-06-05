@@ -406,11 +406,16 @@ script entry point
 # set to database credentials/host
 # taken from local environment variable in the format postgresql+psycopg2://localuser:localuser@localhost/a11ymon
 CONNECTION_URI = os.getenv("DATABASE_URL")
+# need to fudge this for now as VCAP_SERVICES has the URI as postgres:... instead of postgresql:
+if(CONNECTION_URI[:9] == "postgres:"):
+    fudged_connection_uri = "postgresql" + CONNECTION_URI[8:]
+else:
+    fudged_connection_uri = CONNECTION_URI
 
 url_under_test = ""
 
 print("Connecting to database...")
-engine = create_engine(CONNECTION_URI)
+engine = create_engine(fudged_connection_uri)
 
 Session = sessionmaker(bind=engine)
 session = Session()
