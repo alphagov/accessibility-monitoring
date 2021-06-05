@@ -51,9 +51,15 @@ def parse_result(json_in):
     return results_dict
 
 
+
 def save_result(domain_name, results_dict):
     global toc
     toc = time.perf_counter()
+    violations_critical = 0
+    violations_serious = 0
+    violations_moderate = 0
+    violations_minor = 0
+
     if "error" in results_dict:
         result = session.execute(
             test_header.insert(),
@@ -84,7 +90,32 @@ def save_result(domain_name, results_dict):
             result = session.execute(
                 test_data.insert(), {"test_id": test_id, "rule_name": testItem["id"], "test_status": "violation",
                                      "nodes": testItem["nodes"]})
+
+            # Special case for violations: record the number of each severity in the test_header table
+            if testItem["impact"]=="critical":
+                violations_critical += 1
+            if testItem["impact"]=="serious":
+                violations_serious += 1
+            if testItem["impact"]=="moderate":
+                violations_moderate += 1
+            if testItem["impact"]=="minor":
+                violations_minor += 1
+            result = session.execute(
+                "UPDATE a11ymon.testresult_axe_header SET "
+                "violations_critical=:violations_critical, "
+                "violations_serious=:violations_serious, "
+                "violations_moderate=:violations_moderate, "
+                "violations_minor=:violations_minor  "
+                "WHERE test_id=:test_id",
+                {"test_id": test_id,
+                 "violations_critical": violations_critical,
+                 "violations_serious": violations_serious,
+                 "violations_moderate": violations_moderate,
+                 "violations_minor": violations_minor})
+
+
         session.commit()
+
 
         # record passes
         count = 0
@@ -445,6 +476,7 @@ website_register = Table('website_register', metadata,
 
 axe_rule = Table('axe_rule', metadata,
                  Column('rule_id', Integer, primary_key=True, autoincrement=True),
+                 Column('name', String),
                  Column('description', String),
                  Column('impact', String),
                  Column('selector', String),
