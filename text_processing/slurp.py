@@ -159,8 +159,13 @@ def doTheLoop():
                 successfulSlurps += 1
             else:
                 failedSlurps += 1
+                # save to the table to mark it as "done" so that we don't try to retest it
+                saveInfo(row.website_id, '')
         else:
+            # dead site.
             skippedSlurps += 1
+            # save to the table to mark it as "done" so that we don't try to retest it
+            saveInfo(row.website_id, '')
             logger.debug("dead site")
 
         toc = time.perf_counter()
