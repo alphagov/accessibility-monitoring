@@ -100,8 +100,11 @@ def cleanup(website_id):
     soup = BeautifulSoup(raw_text, 'html.parser')
     title = soup.title.string
     text = soup.body.get_text("|", strip=True)
+    for tag in soup.find_all("meta"):
+        if tag.get("name", None) == "description":
+            description = tag.get("content", None)
     logger.debug("saving '" + title + "'...")
-    session.query(websites).filter(websites.website_id == website_id).update({"home_page_title": title, "home_page_body": text})
+    session.query(websites).filter(websites.website_id == website_id).update({"home_page_title": title, "home_page_body": text, "home_page_description": description})
     session.commit()
     logger.debug("saved '" + title)
 
