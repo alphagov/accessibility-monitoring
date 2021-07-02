@@ -1,6 +1,6 @@
 ---
 applications:
-  - name: slurper
+  - name: catter
     buildpacks:
       - python_buildpack
     no-route: True

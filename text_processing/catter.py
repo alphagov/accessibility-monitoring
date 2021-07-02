@@ -5,6 +5,14 @@ from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, func
 
+import nltk
+from nltk import sent_tokenize
+from nltk import word_tokenize
+from nltk.probability import FreqDist
+import matplotlib.pyplot as plt
+from nltk.corpus import stopwords
+from wordcloud import WordCloud
+
 import logging
 
 logger = logging.getLogger()
@@ -29,32 +37,6 @@ doTheLoop - cycle through all sites to process
 """
 
 
-def doTheLoop():
-    global current_website_id, totalSites
-
-    logger.info("Selecting data...")
-    # pick a url at random
-    ## for testing single site => query = session.query(websites).filter_by(website_id=13044).order_by(func.random())
-    query = session.query(websites).filter(websites.last_updated == None).order_by(func.random())
-    rows = query.all()
-    totalRows = query.count()
-    for row in rows:
-        current_website_id = row.home_page_url
-        print("Testing " + current_website_id)
-
-        tic = time.perf_counter()
-        totalSites += 1
-        print()
-        print("****************************")
-        slurps = totalSites
-        print("Site number ", slurps, " of ", totalRows, ": ", current_website_id)
-        print("****************************")
-        print()
-
-    print(".")
-    print("****************************")
-    print("Total tests: ", totalSites)
-    print("****************************")
 
 
 """
@@ -90,9 +72,12 @@ session = Session(engine)
 ##########
 # Set up process flags
 do_cleanup = False
+do_visualisation = False
+do_singlesite = False
 
 
 def cleanup(website_id):
+    global stopwords
     # fetch raw text & title
     logger.debug("cleaning " + str(current_website_id))
     query=session.query(websites).filter(websites.website_id == website_id)
@@ -100,6 +85,7 @@ def cleanup(website_id):
     soup = BeautifulSoup(raw_text, 'html.parser')
     title = soup.title.string
     text = soup.body.get_text("|", strip=True)
+    description = ""
     for tag in soup.find_all("meta"):
         if tag.get("name", None) == "description":
             description = tag.get("content", None)
@@ -108,38 +94,113 @@ def cleanup(website_id):
     session.commit()
     logger.debug("saved '" + title)
 
+def visualise(website_id):
+    global stopwords
+
+    query = session.query(websites).filter(websites.website_id == website_id)
+    text = query.one().home_page_title + '|' + query.one().home_page_description + '|' + query.one().home_page_body
+
+    #Tokenize the text with words :
+    words = word_tokenize(text)
+
+    # List of stopwords
+    stopwords = stopwords.words("english")
+    #print(stopwords)
+
+    # Empty list to store words:
+    words_no_punc = []
+    # Removing punctuation marks :
+    for w in words:
+        if w.isalpha():
+            words_no_punc.append(w.lower())
+
+    # Empty list to store clean words :
+    clean_words = []
+
+    for w in words_no_punc:
+        if w not in stopwords:
+            clean_words.append(w)
+
+    # Frequency distribution :
+    fdist = FreqDist(clean_words)
+
+    print(fdist.most_common(10))
+
+    #Generating the wordcloud :
+    wordcloud = WordCloud().generate(text)
+
+    # Plot the wordcloud :
+    plt.figure(figsize=(8, 8))
+    plt.imshow(wordcloud)
+
+    # To remove the axis value :
+    plt.axis("off")
+    plt.show()
 
 
 def doStuff(current_website_id):
-    global do_cleanup
+    global do_cleanup, do_visualisation, do_singlesite
     logger.debug("doing stuff with " + str(current_website_id))
     if (do_cleanup):
         cleanup(current_website_id)
+    if (do_visualisation & do_singlesite):
+        visualise(current_website_id)
 
+def doTheLoop():
+    global current_website_id, totalSites
+
+    logger.info("Selecting data...")
+    # pick a url at random
+    query = session.query(websites).filter(websites.home_page_body == None).order_by(func.random())
+    rows = query.all()
+    totalRows = query.count()
+    for row in rows:
+        current_website_id = row.website_id
+        print("Processing " + row.home_page_url)
+
+        tic = time.perf_counter()
+        totalSites += 1
+        doStuff(current_website_id)
+        print()
+        print("****************************")
+        slurps = totalSites
+        print("Site number ", slurps, " of ", totalRows, ": ", current_website_id)
+        print("****************************")
+        print()
+
+    print(".")
+    print("****************************")
+    print("Total tests: ", totalSites)
+    print("****************************")
 
 
 def main(argv):
     global current_website_id
-    global do_cleanup
+    global do_cleanup, do_visualisation, do_singlesite
     singleSite = ''
+    usage = 'Usage: catter.py -s <url> -[cv]'
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hs:c", ["singleSite="])
+        opts, args = getopt.getopt(sys.argv[1:], "hs:cv", ["singleSite="])
     except getopt.GetoptError:
-        print('error in command line. Usage: catter.py -s <url>')
+        print('error in command line. ' + usage)
         sys.exit(2)
     for opt, arg in opts:
         if opt == '-h':
-            print('catter.py -s <url>')
+            print(usage)
             sys.exit()
         if opt in ("-s", "--singleSite"):
+            do_singlesite = True
             singleSite = arg
             logger.info('single url to retrieve is ' + singleSite)
         if opt in ("-c", "--cleanup"):
             do_cleanup = True
+        if opt in ("-v", "--visualise"):
+            do_visualisation = True
 
 
     if singleSite:
+        print("Single Site: ", singleSite)
         query = session.query(websites).filter(websites.home_page_url == singleSite)
         current_website_id = query.one().website_id
         # do the thing...
