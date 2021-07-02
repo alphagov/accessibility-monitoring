@@ -93,14 +93,19 @@ do_cleanup = False
 
 
 def cleanup(website_id):
-    # fetch raw text
+    # fetch raw text & title
     logger.debug("cleaning " + str(current_website_id))
     query=session.query(websites).filter(websites.website_id == website_id)
     raw_text = query.one().home_page_raw
     soup = BeautifulSoup(raw_text, 'html.parser')
-    print(soup.title.string)
-    # print(soup.get_text())
-    
+    title = soup.title.string
+    text = soup.body.get_text("|", strip=True)
+    logger.debug("saving '" + title + "'...")
+    session.query(websites).filter(websites.website_id == website_id).update({"home_page_title": title, "home_page_body": text})
+    session.commit()
+    logger.debug("saved '" + title)
+
+
 
 def doStuff(current_website_id):
     global do_cleanup
