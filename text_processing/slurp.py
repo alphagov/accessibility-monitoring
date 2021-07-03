@@ -37,7 +37,7 @@ def saveInfo(website_id, html_content):
     # replace any NULs
     html_content = html_content.replace("\x00", "\uFFFD")
     result = session.execute(
-        "UPDATE website_content SET home_page_content = :html_content, last_updated=NOW() WHERE website_id = :website_id;",
+        "UPDATE website_content SET home_page_raw = :html_content, last_updated=NOW() WHERE website_id = :website_id;",
         {"html_content": html_content, "website_id": website_id})
     session.commit()
 
