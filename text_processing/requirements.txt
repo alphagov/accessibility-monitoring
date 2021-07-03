@@ -2,3 +2,6 @@ psycopg2-binary
 sqlalchemy
 requests
 bs4
+nltk
+matplotlib
+wordcloud

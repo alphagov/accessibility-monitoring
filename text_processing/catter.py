@@ -9,9 +9,9 @@ import nltk
 from nltk import sent_tokenize
 from nltk import word_tokenize
 from nltk.probability import FreqDist
-import matplotlib.pyplot as plt
 from nltk.corpus import stopwords
 from wordcloud import WordCloud
+import matplotlib.pyplot as plt
 
 import logging
 
@@ -28,14 +28,6 @@ ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 totalSites = 0
-
-
-"""
-**********************************************
-doTheLoop - cycle through all sites to process
-**********************************************
-"""
-
 
 
 
@@ -79,16 +71,26 @@ do_singlesite = False
 def cleanup(website_id):
     global stopwords
     # fetch raw text & title
+    text=" "
+    title=" "
+    description = ""
     logger.debug("cleaning " + str(current_website_id))
     query=session.query(websites).filter(websites.website_id == website_id)
     raw_text = query.one().home_page_raw
     soup = BeautifulSoup(raw_text, 'html.parser')
-    title = soup.title.string
-    text = soup.body.get_text("|", strip=True)
-    description = ""
+    if(soup.title):
+        title = soup.title.string
+    if(soup.body):
+        text = soup.body.get_text("|", strip=True)
     for tag in soup.find_all("meta"):
         if tag.get("name", None) == "description":
             description = tag.get("content", None)
+    if text is None:
+        text=""
+    if title is None:
+        title = ""
+    if description is None:
+        description = ""
     logger.debug("saving '" + title + "'...")
     session.query(websites).filter(websites.website_id == website_id).update({"home_page_title": title, "home_page_body": text, "home_page_description": description})
     session.commit()
@@ -146,25 +148,26 @@ def doStuff(current_website_id):
     if (do_visualisation & do_singlesite):
         visualise(current_website_id)
 
+"""
+**********************************************
+doTheLoop - cycle through all sites to process
+**********************************************
+"""
+
 def doTheLoop():
     global current_website_id, totalSites
 
     logger.info("Selecting data...")
     # pick a url at random
-    query = session.query(websites).filter(websites.home_page_body == None).order_by(func.random())
-    rows = query.all()
-    totalRows = query.count()
-    for row in rows:
-        current_website_id = row.website_id
-        print("Processing " + row.home_page_url)
+    for current_website_id, home_page_url in session.query(websites.website_id, websites.home_page_url).filter(websites.home_page_body == None):
+        print("Processing " + home_page_url)
+        logger.debug("Processing " + home_page_url)
 
-        tic = time.perf_counter()
         totalSites += 1
         doStuff(current_website_id)
         print()
         print("****************************")
-        slurps = totalSites
-        print("Site number ", slurps, " of ", totalRows, ": ", current_website_id)
+        print("Site number ", totalSites)
         print("****************************")
         print()
 

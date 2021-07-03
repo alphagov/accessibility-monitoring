@@ -1,1 +1,1 @@
-web: python catter.py -s leedsbeckett.ac.uk -c
+web: python catter.py -c
