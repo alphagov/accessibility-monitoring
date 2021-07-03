@@ -82,6 +82,7 @@ def cleanup(website_id):
         title = soup.title.string
     if(soup.body):
         text = soup.body.get_text("|", strip=True)
+        text = text.encode('utf-8', 'replace').decode() # the encode/decode is to catch any illegal utf surrogates (yes, there are webpages with them in...)
     for tag in soup.find_all("meta"):
         if tag.get("name", None) == "description":
             description = tag.get("content", None)
@@ -92,6 +93,7 @@ def cleanup(website_id):
     if description is None:
         description = ""
     logger.debug("saving '" + title + "'...")
+    logger.debug("Description=" + description)
     session.query(websites).filter(websites.website_id == website_id).update({"home_page_title": title, "home_page_body": text, "home_page_description": description})
     session.commit()
     logger.debug("saved '" + title)
