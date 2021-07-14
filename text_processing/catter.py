@@ -8,7 +8,9 @@ from sqlalchemy import create_engine, func
 import nltk
 from nltk import word_tokenize
 from nltk.probability import FreqDist
+from nltk.stem import PorterStemmer
 from nltk.corpus import stopwords
+
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 
@@ -61,6 +63,7 @@ Base.prepare(engine, reflect=True)
 # matching that of the table name.
 websites = Base.classes.website_content
 bags_o_words = Base.classes.bags_o_words
+term_document_matrix = Base.classes.term_document_matrix
 
 session = Session(engine)
 
@@ -71,6 +74,8 @@ do_visualisation = False
 do_singlesite = False
 do_destop = False
 do_stemmify = False
+do_generate_keywords = False
+do_generate_tdm = False
 
 
 def cleanup(website_id):
@@ -157,7 +162,8 @@ def generate_keywords(organisation_type_id):
 
     # Get list of stopwords
     stopwords_list = stopwords.words("english")
-    common_webby_words = ["contact", "us", "website", "cookies", "cookie", "find", "use", "also", "sitemap", "please", "search", "email", "see", "would",
+    common_webby_words = ["contact", "us", "website", "cookies", "cookie", "find", "use",
+                          "also", "sitemap", "please", "search", "email", "see", "would", "browser", "online",
                           "january", "february", "march", "april", "may", "june", "july",
                           "august", "september", "october", "november", "december",
                           ]
@@ -172,10 +178,16 @@ def generate_keywords(organisation_type_id):
         if w not in stopwords_list:
             clean_words.append(w)
 
+    porter = PorterStemmer()
+    stemmed_words = []
+    for w in clean_words:
+        stemmed_words.append(porter.stem(w))
+
+    final_words = stemmed_words # change to exclude steps e.g. clean_words,. words_no_punc
 
     print("Most common words:")
     # Frequency distribution :
-    fdist = FreqDist(clean_words)
+    fdist = FreqDist(final_words)
 
     most_common_words = fdist.most_common(30)
     print(most_common_words)
@@ -185,13 +197,16 @@ def generate_keywords(organisation_type_id):
     session.query(bags_o_words).filter(bags_o_words.organisation_type_id == organisation_type_id).delete()
     session.commit()
 
+    word_index=0
     for w, freq in most_common_words:
+        word_index +=1
         session.add_all(
             [
                 bags_o_words(
                     organisation_type_id=organisation_type_id,
                     word=w,
-                    frequency=freq
+                    frequency=freq,
+                    word_index=word_index
                 )
             ]
         )
@@ -199,7 +214,7 @@ def generate_keywords(organisation_type_id):
     session.commit()
 
     if(is_on_paas is None):
-        #Generating the wordcloud :
+        #Generate a wordcloud:
         wordcloud = WordCloud().generate(' '.join(clean_words))
 
         # Plot the wordcloud :
@@ -209,6 +224,96 @@ def generate_keywords(organisation_type_id):
         # To remove the axis value :
         plt.axis("off")
         plt.show()
+
+
+def make_tdm(organisation_type_id):
+    site_count = 0
+    # create the term-document matrix for the supplied org-type
+
+    # get the bag-o-words for this org-type
+    bag_o_words = []
+    for word, word_id in session.query(bags_o_words.word, bags_o_words.word_index).filter(bags_o_words.organisation_type_id == organisation_type_id):
+        bag_o_words.append([word,word_id])
+
+    # delete any entries for this org_type
+    session.query(term_document_matrix).filter(term_document_matrix.organisation_type_id == organisation_type_id).delete()
+    session.commit()
+
+    # select all sites in this org-type
+    result = session.query(websites).filter(websites.organisation_type_id_known == organisation_type_id)
+    for row in result:
+        site_count +=1
+        print(row.home_page_title)
+        text=""
+        if(row.home_page_title is not None):
+            text = text + row.home_page_title + ' '
+        if(row.home_page_description is not None):
+            text = text + row.home_page_description + ' '
+        if(row.home_page_body is not None):
+            text = text + row.home_page_body + ' '
+        write_tdm_row(organisation_type_id, row.website_id, text, bag_o_words)
+
+
+    # select an equal number of random sites definitely not in this org-type.
+    result = session.query(websites).filter(websites.organisation_type_id_known != organisation_type_id).order_by(func.random()).limit(site_count)
+    for row in result:
+        site_count += 1
+        print(row.home_page_title)
+        text = ""
+        if (row.home_page_title is not None):
+            text = text + row.home_page_title + ' '
+        if (row.home_page_description is not None):
+            text = text + row.home_page_description + ' '
+        if (row.home_page_body is not None):
+            text = text + row.home_page_body + ' '
+        write_tdm_row(organisation_type_id, row.website_id, text, bag_o_words)
+
+
+def write_tdm_row(organisation_type_id, website_id, text, bag_o_words):
+    # write a row in the tdm for given site and given orgtype -
+    # this should be called for both sites known to be in that orgtype and known NOT to be in that orgtype
+    print(organisation_type_id, website_id)
+
+    #Tokenize the text with words :
+    words = word_tokenize(text)
+
+    # Empty list to store words:
+    words_no_punc = []
+    print("Removing punctuation marks")
+    for w in words:
+        if w.isalpha():
+            words_no_punc.append(w.lower())
+
+    porter = PorterStemmer()
+    stemmed_words = []
+    for w in words_no_punc:
+        stemmed_words.append(porter.stem(w))
+
+    final_words=[]
+    # Frequency distribution :
+    fdist = FreqDist(stemmed_words)
+    print(fdist.items())
+    for bow, bow_id in bag_o_words:
+        bow_freq=0
+        for w, f in fdist.items():
+            if (w==bow):
+                bow_freq=f
+        print(bow_id, bow, bow_freq)
+
+        session.add_all(
+            [
+                term_document_matrix(
+                    organisation_type_id=organisation_type_id,
+                    website_id=website_id,
+                    frequency=bow_freq,
+                    word_index=bow_id
+                )
+            ]
+        )
+        session.flush()
+
+    session.commit()
+
 
 
 def visualise(website_id):
@@ -296,12 +401,12 @@ def doTheLoop():
 
 def main(argv):
     global current_website_id
-    global do_cleanup, do_visualisation, do_singlesite, do_destop, do_stemmify, do_generate_keywords
+    global do_cleanup, do_visualisation, do_singlesite, do_destop, do_stemmify, do_generate_keywords, do_generate_tdm
     singleSite = ''
-    usage = 'Usage: catter.py -s <url> -[cvoek]'
+    usage = 'Usage: catter.py -s <url> -[cvoekt] <orgtype>'
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hs:cvoek:", ["singleSite=", "orgtype="])
+        opts, args = getopt.getopt(sys.argv[1:], "hs:cvoek:t:", ["singleSite=", "orgtype="])
     except getopt.GetoptError:
         print('error in command line. ' + usage)
         sys.exit(2)
@@ -322,6 +427,9 @@ def main(argv):
         if opt in ("-k", "--keywords"):
             do_generate_keywords = True
             orgtype = arg
+        if opt in ("-t", "--tdm"):
+            do_generate_tdm = True
+            orgtype = arg
 
 
     if singleSite:
@@ -337,6 +445,8 @@ def main(argv):
                 generate_keywords(organisation_type.organisation_type_id_known)
         else:
             generate_keywords(orgtype)
+    elif do_generate_tdm:
+        make_tdm(orgtype)
     else:
         doTheLoop()
 
