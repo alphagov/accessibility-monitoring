@@ -1,1 +1,1 @@
-web: python catter.py -k all
+web: python catter.py -t 111
