@@ -1,4 +1,6 @@
 import os, sys, getopt
+
+import pylab as p
 from bs4 import BeautifulSoup
 
 from sqlalchemy.ext.automap import automap_base
@@ -11,8 +13,13 @@ from nltk.probability import FreqDist
 from nltk.stem import PorterStemmer
 from nltk.corpus import stopwords
 
+import numpy as np
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
+
+from sklearn import svm
+from sklearn.model_selection import train_test_split
+from sklearn import metrics
 
 import logging
 
@@ -327,18 +334,53 @@ def make_svm(organisation_type_id):
         website_ids.append(row.website_id)
 
     print(labels)
+    targets = np.array(labels)
+    print(targets.shape)
     print(website_ids)
 
-    X =[]
-    result = session.query(term_document_matrix).\
-            filter(organisation_type_id == organisation_type_id).\
-            order_by(term_document_matrix.website_id, term_document_matrix.word_index).limit(10).all()
+    X = []
+    counter=0
+    result = session.query(term_document_matrix.website_id).\
+        filter(organisation_type_id == organisation_type_id).\
+        order_by(term_document_matrix.website_id).distinct()
     for row in result:
-        print(row.word_index, row.frequency)
-        #X.append([word_index,frequency])
-    #print(X)
+        current_website_id = row.website_id
+        counter +=1
+        print(counter, current_website_id)
 
-    
+        line = []
+        result = session.query(term_document_matrix).\
+                filter(organisation_type_id == organisation_type_id, term_document_matrix.website_id==current_website_id).\
+                order_by(term_document_matrix.word_index)
+        for row in result:
+            #print(counter, current_website_id, row.word_index, row.frequency)
+            line.append(row.frequency)
+
+        X.append(line)
+    features=np.array(X)
+    print(features.shape)
+
+    # define the classifier we're going to use.
+    # We'll stick to a linear kernel and a default C of 1
+    clf = svm.SVC(kernel='linear', C=1.0)
+
+    X_train, X_test, y_train, y_test = train_test_split(features, targets, test_size=0.3, random_state=10)  # 70% training and 30% test
+
+    # Train the model using the training set
+    clf.fit(X_train, y_train)
+
+    # Predict the response for test dataset
+    y_pred = clf.predict(X_test)
+
+    print("Accuracy:", metrics.accuracy_score(y_test, y_pred))
+
+    # Model Precision: what percentage of positive tuples are labeled as such?
+    print("Precision:",metrics.precision_score(y_test, y_pred))
+
+    # Model Recall: what percentage of positive tuples are labelled as such?
+    print("Recall:",metrics.recall_score(y_test, y_pred))
+
+
 
 def visualise(website_id):
     global stopwords
