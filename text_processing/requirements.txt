@@ -5,3 +5,5 @@ bs4
 nltk
 matplotlib
 wordcloud
+sklearn
+numpy

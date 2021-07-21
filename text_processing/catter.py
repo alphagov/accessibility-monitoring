@@ -66,7 +66,7 @@ Base = automap_base()
 # reflect the tables
 Base.prepare(engine, reflect=True)
 
-# mapped classes are now created with names by default
+# mapped classes are created with names by default
 # matching that of the table name.
 websites = Base.classes.website_content
 bags_o_words = Base.classes.bags_o_words
@@ -84,6 +84,7 @@ do_stemmify = False
 do_generate_keywords = False
 do_generate_tdm = False
 do_generate_svm = False
+do_predict = False
 
 
 def cleanup(website_id):
@@ -324,6 +325,7 @@ def make_svm(organisation_type_id):
     # fetch tdm for org-type
     labels = []
     website_ids = []
+    # fetch labels - whether the site is known to be in this orgtype or not
     result = session.query(term_document_matrix.organisation_type_id, websites.website_id, websites.organisation_type_id_known)\
         .join(websites, term_document_matrix.website_id == websites.website_id).filter(term_document_matrix.organisation_type_id == organisation_type_id)\
         .order_by(term_document_matrix.website_id).distinct()
@@ -333,32 +335,33 @@ def make_svm(organisation_type_id):
         labels.append(member)
         website_ids.append(row.website_id)
 
-    print(labels)
     targets = np.array(labels)
-    print(targets.shape)
-    print(website_ids)
 
-    X = []
-    counter=0
+    logger.debug("********* fetching website IDs from Term-Document Matrix **************")
     result = session.query(term_document_matrix.website_id).\
-        filter(organisation_type_id == organisation_type_id).\
+        filter(term_document_matrix.organisation_type_id == organisation_type_id).\
         order_by(term_document_matrix.website_id).distinct()
+
+    X = np.zeros(shape=(result.count(),30))
+    counter=0
+
     for row in result:
         current_website_id = row.website_id
-        counter +=1
-        print(counter, current_website_id)
+        print("website #", str(counter), "id=", str(current_website_id))
 
-        line = []
+        line = np.empty(shape=(30))
         result = session.query(term_document_matrix).\
                 filter(organisation_type_id == organisation_type_id, term_document_matrix.website_id==current_website_id).\
                 order_by(term_document_matrix.word_index)
         for row in result:
             #print(counter, current_website_id, row.word_index, row.frequency)
-            line.append(row.frequency)
+            line[row.word_index-1] = row.frequency
+            #print(line)
 
-        X.append(line)
-    features=np.array(X)
-    print(features.shape)
+        X[counter] = line
+        counter +=1
+
+    features=X
 
     # define the classifier we're going to use.
     # We'll stick to a linear kernel and a default C of 1
@@ -371,6 +374,7 @@ def make_svm(organisation_type_id):
 
     # Predict the response for test dataset
     y_pred = clf.predict(X_test)
+    #print(y_pred)
 
     print("Accuracy:", metrics.accuracy_score(y_test, y_pred))
 
@@ -380,6 +384,11 @@ def make_svm(organisation_type_id):
     # Model Recall: what percentage of positive tuples are labelled as such?
     print("Recall:",metrics.recall_score(y_test, y_pred))
 
+    # Model F1: balance of precision to recall
+    f1 = metrics.f1_score(y_test, y_pred)
+    print("F1:",f1)
+
+    print(y_pred)
 
 
 def visualise(website_id):
@@ -472,7 +481,7 @@ def main(argv):
     usage = 'Usage: catter.py -s <url> -[cvoektx] <orgtype>'
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hs:cvoek:t:x:", ["singleSite=", "orgtype="])
+        opts, args = getopt.getopt(sys.argv[1:], "hs:cvoek:t:x:P:", ["singleSite=", "orgtype="])
     except getopt.GetoptError:
         print('error in command line. ' + usage)
         sys.exit(2)
@@ -499,6 +508,9 @@ def main(argv):
         if opt in ("-x", "--svm"):
             do_generate_svm = True
             orgtype = arg
+        if opt in ("-p", "--predict"):
+            do_predict = True
+            orgtype = arg
 
 
     if singleSite:
@@ -517,6 +529,9 @@ def main(argv):
     elif do_generate_tdm:
         make_tdm(orgtype)
     elif do_generate_svm:
+        make_svm(orgtype)
+    elif do_predict:
+        # make the svm then call predict(), passing the resulting svm model
         make_svm(orgtype)
     else:
         doTheLoop()
