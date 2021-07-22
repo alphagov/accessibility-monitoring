@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, func
+from sqlalchemy.dialects import postgresql
 
 import nltk
 from nltk import word_tokenize
@@ -235,7 +236,8 @@ def generate_keywords(organisation_type_id):
         plt.show()
 
 
-def make_tdm(organisation_type_id):
+def make_tdm(organisation_type_id, mode="train"):
+    print("making TDM in", mode, "mode")
     site_count = 0
     # create the term-document matrix for the supplied org-type
 
@@ -243,50 +245,67 @@ def make_tdm(organisation_type_id):
     bag_o_words = []
     for word, word_id in session.query(bags_o_words.word, bags_o_words.word_index).filter(bags_o_words.organisation_type_id == organisation_type_id):
         bag_o_words.append([word,word_id])
+    print(bag_o_words)
 
-    # delete any entries for this org_type
-    session.query(term_document_matrix).filter(term_document_matrix.organisation_type_id == organisation_type_id).delete()
-    session.commit()
+    if(mode=="train"):
+        # delete any entries for this org_type
+        session.query(term_document_matrix).filter(term_document_matrix.organisation_type_id == organisation_type_id).delete()
+        session.commit()
 
-    # select all sites in this org-type
-    result = session.query(websites).filter(websites.organisation_type_id_known == organisation_type_id)
-    for row in result:
-        site_count +=1
-        text=""
-        if(row.home_page_title is not None):
-            text = text + row.home_page_title + ' '
-        if(row.home_page_description is not None):
-            text = text + row.home_page_description + ' '
-        if(row.home_page_body is not None):
-            text = text + row.home_page_body + ' '
-        write_tdm_row(organisation_type_id, row.website_id, text, bag_o_words)
+        # select all sites in this org-type
+        result = session.query(websites).filter(websites.organisation_type_id_known == organisation_type_id)
+        for row in result:
+            site_count +=1
+            text=""
+            if(row.home_page_title is not None):
+                text = text + row.home_page_title + ' '
+            if(row.home_page_description is not None):
+                text = text + row.home_page_description + ' '
+            if(row.home_page_body is not None):
+                text = text + row.home_page_body + ' '
+            write_tdm_row(organisation_type_id, row.website_id, text, bag_o_words)
 
 
-    # select an equal number of random sites definitely not in this org-type.
-    result = session.query(websites).filter(websites.organisation_type_id_known != organisation_type_id).order_by(func.random()).limit(site_count)
-    for row in result:
-        site_count += 1
-        text = ""
-        if (row.home_page_title is not None):
-            text = text + row.home_page_title + ' '
-        if (row.home_page_description is not None):
-            text = text + row.home_page_description + ' '
-        if (row.home_page_body is not None):
-            text = text + row.home_page_body + ' '
-        write_tdm_row(organisation_type_id, row.website_id, text, bag_o_words)
+        # select an equal number of random sites definitely not in this org-type.
+        result = session.query(websites).filter(websites.organisation_type_id_known != organisation_type_id).order_by(func.random()).limit(site_count)
+        for row in result:
+            site_count += 1
+            text = ""
+            if (row.home_page_title is not None):
+                text = text + row.home_page_title + ' '
+            if (row.home_page_description is not None):
+                text = text + row.home_page_description + ' '
+            if (row.home_page_body is not None):
+                text = text + row.home_page_body + ' '
+            write_tdm_row(organisation_type_id, row.website_id, text, bag_o_words)
+    elif(mode=="predict"):
+        print("Making TDM for all unknown sites")
+        # NB. It's not necessary to delete existing entries when predicting for this org_type as they'll have been deleted when the training was run
+        # select all sites not yet categorised
+        result = session.query(websites).filter(websites.organisation_type_id_known == None)
+        for row in result:
+            site_count += 1
+            text = ""
+            if (row.home_page_title is not None):
+                text = text + row.home_page_title + ' '
+            if (row.home_page_description is not None):
+                text = text + row.home_page_description + ' '
+            if (row.home_page_body is not None):
+                text = text + row.home_page_body + ' '
+            write_tdm_row(organisation_type_id, row.website_id, text, bag_o_words)
 
 
 def write_tdm_row(organisation_type_id, website_id, text, bag_o_words):
     # write a row in the tdm for given site and given orgtype -
     # this should be called for both sites known to be in that orgtype and known NOT to be in that orgtype
-    print(organisation_type_id, website_id)
+    #print(organisation_type_id, website_id)
 
     #Tokenize the text with words :
     words = word_tokenize(text)
 
     # Empty list to store words:
     words_no_punc = []
-    print("Removing punctuation marks")
+
     for w in words:
         if w.isalpha():
             words_no_punc.append(w.lower())
@@ -299,13 +318,13 @@ def write_tdm_row(organisation_type_id, website_id, text, bag_o_words):
     final_words=[]
     # Frequency distribution :
     fdist = FreqDist(stemmed_words)
-    print(fdist.items())
+
     for bow, bow_id in bag_o_words:
         bow_freq=0
         for w, f in fdist.items():
             if (w==bow):
                 bow_freq=f
-        print(bow_id, bow, bow_freq)
+        #print(bow_id, bow, bow_freq)
 
         session.add_all(
             [
@@ -322,6 +341,8 @@ def write_tdm_row(organisation_type_id, website_id, text, bag_o_words):
     session.commit()
 
 def make_svm(organisation_type_id):
+    global do_predict
+
     # fetch tdm for org-type
     labels = []
     website_ids = []
@@ -347,11 +368,12 @@ def make_svm(organisation_type_id):
 
     for row in result:
         current_website_id = row.website_id
-        print("website #", str(counter), "id=", str(current_website_id))
+        #logger.debug("website #" + str(counter) + "id=" + str(current_website_id))
 
         line = np.empty(shape=(30))
         result = session.query(term_document_matrix).\
-                filter(organisation_type_id == organisation_type_id, term_document_matrix.website_id==current_website_id).\
+                filter(organisation_type_id == organisation_type_id).\
+                filter(term_document_matrix.website_id==current_website_id).\
                 order_by(term_document_matrix.word_index)
         for row in result:
             #print(counter, current_website_id, row.word_index, row.frequency)
@@ -388,7 +410,75 @@ def make_svm(organisation_type_id):
     f1 = metrics.f1_score(y_test, y_pred)
     print("F1:",f1)
 
-    print(y_pred)
+    conf_matrix = metrics.confusion_matrix(y_test, y_pred)
+    print(conf_matrix)
+
+    if (do_predict):
+        print("Polishing the crystal ball...")
+        if(f1>0.9):
+            predict(clf, organisation_type_id)
+        else:
+            print("**** model F1 only ", str(f1), ". Not accurate enough! Try creating a new TDM.")
+
+
+def predict(clf, organisation_type_id):
+    # check if there's entries in the TDM for websites not yet tested for this sector
+    tdm_count = session.query(term_document_matrix, websites)\
+        .join(websites, term_document_matrix.website_id == websites.website_id).\
+        filter(term_document_matrix.organisation_type_id == organisation_type_id).\
+        filter(websites.organisation_type_id_known == None).count()
+
+    #logger.debug(str(result.statement.compile(dialect=postgresql.dialect())))
+    print("tdm count", str(tdm_count))
+    if tdm_count == 0:
+        # populate the TDM
+        make_tdm(organisation_type_id, "predict")
+
+    # pass in all the unknown websites to the model
+    # todo: consider re-evaluating the categorisation of already-categorised sites by passing in all but those already known to be this type (or heck, just all of them!)
+    result = session.query(websites).filter(websites.organisation_type_id_known == None)
+    print("Number of unknown sites:", result.count())
+    x_predict = np.zeros(shape=(result.count(), 30))
+
+
+    counter=0
+    website_ids = []
+    website_urls = []
+    for row in result:
+        current_website_id = row.website_id
+        website_ids.append(current_website_id)
+        website_urls.append(row.home_page_url)
+        #print("website #", str(counter), "orgtype=", organisation_type_id, "id=", str(current_website_id), " url=", row.home_page_url)
+
+        # lookup word distribution in the TDM
+        line = np.empty(shape=(30))
+        result = session.query(term_document_matrix).\
+                filter(term_document_matrix.organisation_type_id == organisation_type_id).\
+                filter(term_document_matrix.website_id==current_website_id).\
+                order_by(term_document_matrix.word_index)
+        #logger.debug(str(result.statement.compile(dialect=postgresql.dialect())))
+        for row in result:
+            #print(counter, current_website_id, row.word_index, row.frequency)
+            line[row.word_index-1] = row.frequency
+
+        #print(line)
+        x_predict[counter] = line
+        counter +=1
+
+    print("predicting...")
+    y_pred = clf.predict(x_predict)
+    #logger.debug(y_pred)
+
+    i=0
+    for is_this_orgtype in y_pred:
+        if(is_this_orgtype==1):
+            website_id = website_ids[i]
+            print("Got one!", website_urls[i])
+            session.query(websites).filter(websites.website_id == website_id).update(
+                {"organisation_type_id_predicted": organisation_type_id})
+            session.commit()
+
+        i+=1
 
 
 def visualise(website_id):
@@ -476,12 +566,12 @@ def doTheLoop():
 
 def main(argv):
     global current_website_id
-    global do_cleanup, do_visualisation, do_singlesite, do_destop, do_stemmify, do_generate_keywords, do_generate_tdm, do_generate_svm
+    global do_cleanup, do_visualisation, do_singlesite, do_destop, do_stemmify, do_generate_keywords, do_generate_tdm, do_generate_svm, do_predict
     singleSite = ''
-    usage = 'Usage: catter.py -s <url> -[cvoektx] <orgtype>'
+    usage = 'Usage: catter.py -s <url> -[hcvoek:t:x:p:s:] <orgtype>'
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hs:cvoek:t:x:P:", ["singleSite=", "orgtype="])
+        opts, args = getopt.getopt(sys.argv[1:], "hs:cvoek:t:x:p:", ["singleSite=", "orgtype="])
     except getopt.GetoptError:
         print('error in command line. ' + usage)
         sys.exit(2)

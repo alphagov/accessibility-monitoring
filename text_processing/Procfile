@@ -1,1 +1,1 @@
-web: python catter.py -t 111
+web: python catter.py -p 111 && sleep infinity
