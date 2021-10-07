@@ -3,3 +3,4 @@ venv/*
 package-lock.json
 axeenv/*
 .idea/*
+/venv/

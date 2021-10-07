@@ -184,7 +184,7 @@ def save_info(url, title, description, original_domain):
 
 
 def do_axe_test(site):
-    global successfulTests, failedTests, url_under_test, toc
+    global successfulTests, failedTests, url_under_test, domain_under_test, toc
     axe_result = 0
     results_dict = {"error": {"message": "Axe returned no result"}}
 
@@ -196,7 +196,7 @@ def do_axe_test(site):
             logger.warning(results_dict["error"]["message"])
             failedTests += 1
             toc = time.perf_counter()
-            save_result(url_under_test, results_dict)
+            save_result(domain_under_test, results_dict)
             return (0)
         else:
             # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
@@ -204,9 +204,9 @@ def do_axe_test(site):
             if url[0:11] == "chrome-error":
                 failedTests += 1
                 toc = time.perf_counter()
-                save_result(site, results_dict)
+                save_result(domain_under_test, results_dict)
                 return (0)
-            save_result(url_under_test, results_dict)
+            save_result(domain_under_test, results_dict)
             successfulTests += 1
 
     else:
@@ -214,7 +214,7 @@ def do_axe_test(site):
         # so give up.
         failedTests += 1
         toc = time.perf_counter()
-        save_result(url_under_test, results_dict)
+        save_result(domain_under_test, results_dict)
 
 
 """
@@ -223,7 +223,7 @@ def do_axe_test(site):
 
 
 def check_site_exists(site, ssl):
-    global url_under_test, destination_url
+    global url_under_test, domain_under_test, destination_url
     global successfulTests, failedTests
     r = {}
     timeout = 5
@@ -250,12 +250,12 @@ def check_site_exists(site, ssl):
         logger.info(message)
         # save NOH (=no header) in domains table (uses raw domain (site.gov.uk) rather than full URL)
 
-        save_status(url_under_test, ssl, 'NOH')
+        save_status(domain_under_test, ssl, 'NOH')
         return ""
 
     if r.status_code:
         # save the status_code in domains table (uses raw domain (site.gov.uk) rather than full URL)
-        save_status(url_under_test, ssl, r.status_code)
+        save_status(domain_under_test, ssl, r.status_code)
 
         url = r.url
         if r.status_code < 400:
@@ -271,7 +271,7 @@ def check_site_exists(site, ssl):
     else:
         # save NOH (=no header) in domains table (uses raw domain (site.gov.uk) rather than full URL)
         logger.debug("no result")
-        save_status(url_under_test, ssl, 'NOH')
+        save_status(domain_under_test, ssl, 'NOH')
         return ""
 
 
@@ -333,7 +333,7 @@ doTheLoop - cycle through all sites to test
 
 def do_the_loop():
     global totalTests, tic, toc, successfulTests, failedTests, skippedTests
-    global url_under_test
+    global url_under_test, domain_under_test
 
     logger.info("Selecting data...")
     # pick a url at random
@@ -350,10 +350,10 @@ def do_the_loop():
 
         # check to see when we last tested this url
         # yes, we could take the sites-to-test from a query that joined on the test results table in order to only select the sites that were due, but this script will run indefinitely so we'd need to re-query every day.
-        one_year_ago = datetime.datetime.now() - datetime.timedelta(days=365)
+        one_year_ago = datetime.datetime.now() - datetime.timedelta(days=345)
         logger.debug(one_year_ago)
         tested_rows = session.query(test_header).filter(
-            and_(test_header.c.test_timestamp > one_year_ago, test_header.c.url == row.url)).count()
+            and_(test_header.c.test_timestamp > one_year_ago, test_header.c.domain_name == row.original_domain)).count()
 
         logger.debug(tested_rows)
         if tested_rows == 0:
@@ -413,6 +413,7 @@ else:
     fudged_connection_uri = CONNECTION_URI
 
 url_under_test = ""
+domain_under_test = ""
 
 print("Connecting to database...")
 engine = create_engine(fudged_connection_uri)
