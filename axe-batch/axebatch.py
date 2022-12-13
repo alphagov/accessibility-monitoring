@@ -37,7 +37,8 @@ destination_url = ""
 
 
 def axe_runner(dom2test):
-    axerunner_result = requests.get('https://axerunner.london.cloudapps.digital', params={'targetURL': dom2test})
+    axerunner_result = requests.get('https://axe-runner.london.cloudapps.digital', params={'targetURL': dom2test})
+
     if axerunner_result.status_code == 200:
         return axerunner_result.json()
     else:
