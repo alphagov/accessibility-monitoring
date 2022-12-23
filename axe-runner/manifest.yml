@@ -1,6 +1,6 @@
 ---
 applications:
-  - name: axe_runner
+  - name: axe-runner-2
     buildpacks:
     - https://github.com/cloudfoundry/apt-buildpack.git#v0.2.2
     - nodejs_buildpack
