@@ -18,12 +18,12 @@ from sqlalchemy.types import DateTime
 logger = logging.getLogger()
 logger.setLevel(logging.WARNING)
 
-logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
-ch = logging.StreamHandler()
-ch.setLevel(logging.WARNING)
+ch = logging.StreamHandler(sys.stdout)
+ch.setLevel(logging.DEBUG)
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
@@ -37,7 +37,9 @@ destination_url = ""
 
 
 def axe_runner(dom2test):
+    # axe-runner uses axe v3; axe_runner-2 uses the latest axe
     axerunner_result = requests.get('https://axe-runner.london.cloudapps.digital', params={'targetURL': dom2test})
+    #axerunner_result = requests.get('https://axe-runner-2.london.cloudapps.digital', params={'targetURL': dom2test})
 
     if axerunner_result.status_code == 200:
         return axerunner_result.json()
@@ -53,7 +55,7 @@ def parse_result(json_in):
 
 
 
-def save_result(domain_name, results_dict):
+def save_result(domain_name, results_dict, batch_id=0):
     global toc
     toc = time.perf_counter()
     violations_critical = 0
@@ -64,10 +66,14 @@ def save_result(domain_name, results_dict):
     if "error" in results_dict:
         result = session.execute(
             test_header.insert(),
-            {"test_timestamp": datetime.datetime.now(), "url": domain_name, "domain_name": domain_name,
-             "axe_version": "",
-             "test_environment": "", "time_taken": toc - tic, "test_succeeded": False,
-             "further_info": results_dict["error"]["message"]})
+            {"test_timestamp": datetime.datetime.now(), 
+            "url": domain_name, 
+            "domain_name": domain_name,
+            "axe_version": "",
+            "test_environment": "", 
+            "time_taken": toc - tic, "test_succeeded": False,
+            "further_info": results_dict["error"]["message"],
+            "batch_number": batch_id })
 
         test_id = result.inserted_primary_key[0]
         session.commit()
@@ -76,9 +82,17 @@ def save_result(domain_name, results_dict):
 
         result = session.execute(
             test_header.insert(),
-            {"test_timestamp": results_dict["timestamp"], "url": results_dict["url"], "domain_name": domain_name,
-             "axe_version": results_dict["testEngine"]["version"], "test_environment": results_dict["testEnvironment"],
-             "time_taken": toc - tic, "test_succeeded": True})
+            {
+                "test_timestamp": results_dict["timestamp"], 
+                "url": results_dict["url"], 
+                "domain_name": domain_name,
+                "axe_version": results_dict["testEngine"]["version"], 
+                "test_environment": results_dict["testEnvironment"],
+                "time_taken": toc - tic, 
+                "test_succeeded": True,
+                "batch_number": batch_id 
+            }
+        )
 
         test_id = result.inserted_primary_key[0]
         session.commit()
@@ -171,9 +185,12 @@ def save_status(domain_name, ssl, status_code):
 
 
 def save_info(url, title, description, original_domain):
+    logger.debug("save info: ")
+    logger.debug(url)
+    logger.debug(original_domain)
     result = session.execute(
         "INSERT INTO pubsecweb.website_register (url, htmlhead_title, htmlmeta_description, original_domain) VALUES (:url, :htmlhead_title, :htmlmeta_description, :original_domain) "
-        "ON CONFLICT (url)"
+        "ON CONFLICT (original_domain)"
         "DO UPDATE SET htmlhead_title = :htmlhead_title, htmlmeta_description = :htmlmeta_description, last_updated=NOW();",
         {"url": url, "htmlhead_title": title, "htmlmeta_description": description, "original_domain": original_domain})
     session.commit()
@@ -184,7 +201,7 @@ def save_info(url, title, description, original_domain):
 """
 
 
-def do_axe_test(site):
+def do_axe_test(site, batch_id=0):
     global successfulTests, failedTests, url_under_test, domain_under_test, toc
     axe_result = 0
     results_dict = {"error": {"message": "Axe returned no result"}}
@@ -197,7 +214,7 @@ def do_axe_test(site):
             logger.warning(results_dict["error"]["message"])
             failedTests += 1
             toc = time.perf_counter()
-            save_result(domain_under_test, results_dict)
+            save_result(domain_under_test, results_dict, batch_id)
             return (0)
         else:
             # don't bother recording it if it just led to an error page (NB this depends on axe using chrome)
@@ -205,9 +222,9 @@ def do_axe_test(site):
             if url[0:11] == "chrome-error":
                 failedTests += 1
                 toc = time.perf_counter()
-                save_result(domain_under_test, results_dict)
+                save_result(domain_under_test, results_dict, batch_id)
                 return (0)
-            save_result(domain_under_test, results_dict)
+            save_result(domain_under_test, results_dict, batch_id)
             successfulTests += 1
 
     else:
@@ -215,7 +232,7 @@ def do_axe_test(site):
         # so give up.
         failedTests += 1
         toc = time.perf_counter()
-        save_result(domain_under_test, results_dict)
+        save_result(domain_under_test, results_dict, batch_id)
 
 
 """
@@ -282,9 +299,11 @@ def check_site_exists(site, ssl):
 
 
 def fetch_site_info(url):
+    global domain_under_test
     timeout = 30
     htmlhead_title = ""
     htmlmeta_description = ""
+    logger.info("fetching info for " + domain_under_test + " / " + url)
 
     # we can't rely on the target having correctly configured SSL (a surprising number aren't),
     # so we have an option to disable verification - set this to False
@@ -313,7 +332,7 @@ def fetch_site_info(url):
             destination_url = re.sub(":80", "", r.url)
             destination_url = re.sub(":443", "", r.url)
 
-            save_info(destination_url, htmlhead_title, htmlmeta_description, url_under_test)
+            save_info(destination_url, htmlhead_title, htmlmeta_description, domain_under_test)
             logger.info("Resolved destination = " + destination_url)
 
             return True
@@ -325,17 +344,83 @@ def fetch_site_info(url):
         logger.info(e)
 
 
+
+"""
+*******************************************
+process_batch - test all known sites and record as batch_id
+*******************************************
+"""
+def process_batch(batch_id):
+    global totalTests, tic, toc, successfulTests, failedTests, skippedTests
+    global url_under_test, domain_under_test
+
+    """"
+    SELECT count(*) FROM "pubsecweb"."website_register"
+    where website_id not in
+    (
+        select website_id from "pubsecweb"."website_register" wr 
+        join 
+        "a11ymon"."testresult_axe_header" trah
+        on wr.original_domain = trah.domain_name
+        where batch_number is null and requires_authentication is not true
+    );
+    """
+
+    batch_id_str = str(batch_id)
+    query = session.execute('SELECT website_id, url, original_domain FROM "pubsecweb"."website_register"    where requires_authentication is not true and holding_page is not true and website_id not in     (        select website_id from "pubsecweb"."website_register" wr         join         "a11ymon"."testresult_axe_header" trah        on wr.original_domain = trah.domain_name        where batch_number=' + batch_id_str + ' and requires_authentication is not true and holding_page is not true   )')    
+    rows = query.all()
+    total_rows = len(rows)
+    for row in rows:
+        print("Testing " + row.url)
+        url_under_test = row.url
+        domain_under_test = row.original_domain
+        destination_url = ""
+
+    
+        tic = time.perf_counter()
+        totalTests += 1
+        print()
+        print("****************************")
+        print("Test number ", totalTests, " of ", total_rows, ": ", row.url)
+        print("****************************")
+
+        # don't need to check the site exists now - that phase of work is complete. For now.
+        # surl = checkSiteExists(row.url, True)
+        # nurl = checkSiteExists(row.url, False)
+
+        # # favour SSl
+        # url_to_test = surl if surl != "" else nurl
+
+        url_to_test = row.url
+
+        if url_to_test != "":
+            logger.debug("go test " + url_to_test)
+            fetch_site_info(url_to_test)
+            do_axe_test(url_to_test, batch_id)
+        else:
+            skippedTests += 1
+            logger.debug("dead site")
+
+        toc = time.perf_counter()
+        print(f"Time taken: {toc - tic:0.4f} seconds ({tic:0.4f}, {toc:0.4f})")
+
+        print("Successful / skipped / failed tests: ", successfulTests, "/", skippedTests, "/", failedTests)
+        print("****************************")
+        print()
+
+
+
+
+
 """
 *******************************************
 doTheLoop - cycle through all sites to test
 *******************************************
 """
-
-
 def do_the_loop():
     global totalTests, tic, toc, successfulTests, failedTests, skippedTests
     global url_under_test, domain_under_test
-
+    
     logger.info("Selecting data...")
     # pick a url at random
     # in the long term, the urls to test will be picked from a specific list, but for now we're testing ALL THE THINGS (but only once, hence the further query later)
@@ -445,7 +530,8 @@ test_header = Table('testresult_axe_header', metadata,
                     Column('url', String),
                     Column('domain_name', String),
                     Column('axe_version', String),
-                    Column('test_succeeded', Boolean),
+                    Column('test_succeeded', Boolean), 
+                    Column('batch_number', Integer),
                     schema='a11ymon',
                     extend_existing=True
                     )
@@ -495,11 +581,13 @@ axe_rule = Table('axe_rule', metadata,
 
 
 def main(argv):
-    global url_under_test
+    global url_under_test, domain_under_test
     single_domain = ''
+    batch_id = 0
+
 
     try:
-        opts, args = getopt.getopt(argv, "hd:", ["single_domain="])
+        opts, args = getopt.getopt(argv, "bhd:", ["single_domain=","batch_id="])
     except getopt.GetoptError:
         print('axebatch.py -d <domain_name>')
         sys.exit(2)
@@ -510,11 +598,17 @@ def main(argv):
         elif opt in ("-d", "--single_domain"):
             single_domain = arg
             logger.info('single url to test is ' + single_domain)
+        elif opt in ("-b", "--batch_id"):
+            batch_id_str = arg
+            print('batch ID is #-' + batch_id_str + '-#')
+            batch_id = int(batch_id_str)
+            
 
-    # load axe_rules table into an array
+
 
     if single_domain:
         url_under_test = single_domain
+        domain_under_test = single_domain
 
         # non-ssl
         surl = check_site_exists(single_domain, True)
@@ -533,6 +627,8 @@ def main(argv):
         else:
             logger.debug("dead site")
 
+    elif batch_id !=0:
+        process_batch(batch_id)
     else:
         do_the_loop()
 
