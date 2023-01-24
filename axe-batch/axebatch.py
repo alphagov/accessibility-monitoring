@@ -40,7 +40,7 @@ def axe_runner(dom2test):
     # axe-runner uses axe v3; axe_runner-2 uses the latest axe
     axerunner_result = requests.get('https://axe-runner.london.cloudapps.digital', params={'targetURL': dom2test})
     #axerunner_result = requests.get('https://axe-runner-2.london.cloudapps.digital', params={'targetURL': dom2test})
-
+    
     if axerunner_result.status_code == 200:
         return axerunner_result.json()
     else:
@@ -129,6 +129,16 @@ def save_result(domain_name, results_dict, batch_id=0):
                  "violations_minor": violations_minor})
 
 
+        # If there are no violations (winner, winner, chicken dinner), results_dict["violations"] will have been empty, so the above code won't have run, and we'll have NULL where there should be zeroes, so....
+        if (violations_critical+violations_serious+violations_moderate+violations_minor == 0):
+            result = session.execute(
+                "UPDATE a11ymon.testresult_axe_header SET "
+                "violations_critical=0, "
+                "violations_serious=0, "
+                "violations_moderate=0, "
+                "violations_minor=0  "
+                "WHERE test_id=:test_id",
+                {"test_id": test_id})
         session.commit()
 
 
@@ -332,6 +342,8 @@ def fetch_site_info(url):
             destination_url = re.sub(":80", "", r.url)
             destination_url = re.sub(":443", "", r.url)
 
+            # todo: check if destination_url contains 'webarchive.nationalarchives.gov.uk' - if so, mark it as archived and skip testing
+
             save_info(destination_url, htmlhead_title, htmlmeta_description, domain_under_test)
             logger.info("Resolved destination = " + destination_url)
 
@@ -348,6 +360,11 @@ def fetch_site_info(url):
 """
 *******************************************
 process_batch - test all known sites and record as batch_id
+
+In an ideal world, we could just execute a single query on website_register 
+and loop through the results. 
+But if the script crashes for whatever reason, it'll start again and retest everything. 
+So we need to only select the sites that haven't been tested in this batch.
 *******************************************
 """
 def process_batch(batch_id):
@@ -589,11 +606,11 @@ def main(argv):
     try:
         opts, args = getopt.getopt(argv, "bhd:", ["single_domain=","batch_id="])
     except getopt.GetoptError:
-        print('axebatch.py -d <domain_name>')
+        print('axebatch.py -d <domain_name> -b <batch_id>')
         sys.exit(2)
     for opt, arg in opts:
         if opt == '-h':
-            print('axebatch.py -d <domain_name>')
+            print('axebatch.py -d <domain_name> -b <batch_id>')
             sys.exit()
         elif opt in ("-d", "--single_domain"):
             single_domain = arg
